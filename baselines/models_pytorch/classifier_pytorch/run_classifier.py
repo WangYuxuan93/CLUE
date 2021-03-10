@@ -28,11 +28,14 @@ from transformers import AdamW, WarmupLinearSchedule
 from metrics.clue_compute_metrics import compute_metrics
 from processors import clue_output_modes as output_modes
 from processors import clue_processors as processors
-from processors import clue_convert_examples_to_features as convert_examples_to_features
+from processors import clue_convert_examples_to_features# as convert_examples_to_features
 from processors import collate_fn, xlnet_collate_fn
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
 from tools.progressbar import ProgressBar
+
+from neuronlp2.parser import Parser
+from neuronlp2.sdp_parser import SDPParser
 
 ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig,
                                                                                 RobertaConfig)), ())
@@ -322,16 +325,45 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
         else:
             examples = processor.get_test_examples(args.data_dir)
 
-        features = convert_examples_to_features(examples,
-                                                tokenizer,
-                                                label_list=label_list,
-                                                max_length=args.max_seq_length,
-                                                output_mode=output_mode,
-                                                pad_on_left=bool(args.model_type in ['xlnet']),
-                                                # pad on the left for xlnet
-                                                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-                                                pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
-                                                )
+        if args.parser_model is not None:
+            if args.parser_type == "dp":
+                biaffine_parser = Parser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                    batch_size=args.parser_batch, parser_type=args.parser_type)
+            elif args.parser_type == "sdp":
+                biaffine_parser = SDPParser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                    batch_size=args.parser_batch, parser_type=args.parser_type)
+        else:
+            biaffine_parser = None
+
+        if biaffine_parser is None:
+            features = clue_convert_examples_to_features(examples,
+                                                    tokenizer,
+                                                    label_list=label_list,
+                                                    max_length=args.max_seq_length,
+                                                    output_mode=output_mode,
+                                                    pad_on_left=bool(args.model_type in ['xlnet']),
+                                                    # pad on the left for xlnet
+                                                    pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+                                                    pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
+                                                    )
+        else:
+            features = clue_parsed_convert_examples_to_features(examples,
+                                                    tokenizer,
+                                                    biaffine_parser,
+                                                    label_list=label_list,
+                                                    max_length=args.max_seq_length,
+                                                    output_mode=output_mode,
+                                                    pad_on_left=bool(args.model_type in ['xlnet']),
+                                                    # pad on the left for xlnet
+                                                    pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+                                                    pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
+                                                    expand_type=args.parser_expand_type,
+                                                    align_type=args.parser_align_type,
+                                                    return_tensor=args.parser_return_tensor,
+                                                    compute_dist=args.parser_compute_dist
+                                                    )
+    
+
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)
@@ -366,6 +398,15 @@ def main():
                         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()))
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    ## SBERT parameters
+    parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
+    parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
+    parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
+    parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp"], help="Type of the parser")
+    parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word"], help="Policy to expand parses")
+    parser.add_argument("--parser_align_type", default="nltk", type=str, choices=["nltk","rule"], help="Policy to align subwords in parser")
+    parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
+    parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
 
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,
