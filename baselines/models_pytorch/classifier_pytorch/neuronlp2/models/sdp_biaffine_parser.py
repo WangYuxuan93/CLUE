@@ -104,6 +104,10 @@ class SDPBiaffineParser(nn.Module):
         self.p_rnn = p_rnn
         self.lan_emb_as_input = False
         lan_emb_size = hyps['input_encoder']['lan_emb_size']
+        if 'must_has_head' in hyps['biaffine']:
+            self.must_has_head = hyps['biaffine']['must_has_head']
+        else:
+            self.must_has_head = False
         #self.end_word_id = end_word_id
 
         #logger = get_logger(log_name)
@@ -647,6 +651,14 @@ class SDPBiaffineParser(nn.Module):
         transposed_type_logits = rel_logits.permute(0, 2, 3, 1)  # permute重新排列张量
         # (batch_size, seq_len, seq_len)
         type_preds = transposed_type_logits.argmax(-1)  # 在只有一个label的情况下找到最大的索引
+
+        if self.must_has_head:
+            # (batch_size, seq_len, seq_len)
+            # use heads with max prob for those all heads' prob are lower than 0.5
+            backoff_heads = self._argmax(arc_logits)
+            # (batch_size, seq_len, seq_len)
+            backoff_mask = torch.where(arc_preds.sum(-1).unsqueeze(2).expand_as(arc_preds)==0, torch.ones_like(arc_preds), torch.zeros_like(arc_preds))
+            arc_preds = torch.where(backoff_mask==1, backoff_heads, arc_preds.int())
 
         return arc_preds * mask_3D, type_preds
 

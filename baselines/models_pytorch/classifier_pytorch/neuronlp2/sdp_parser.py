@@ -3,6 +3,7 @@ import sys
 import gc
 import json
 import nltk
+import jieba
 
 #current_path = os.path.dirname(os.path.realpath(__file__))
 #root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -16,8 +17,8 @@ import torch
 import random
 import string
 
-from io import conllx_data
-from models.sdp_biaffine_parser import SDPBiaffineParser
+from .io import conllx_data
+from .models.sdp_biaffine_parser import SDPBiaffineParser
 from transformers import AutoTokenizer
 
 import logging
@@ -162,7 +163,7 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             first_ids_list.append(first_ids)
             #print ("wps:\n", wps)
             #print ("first_ids:\n", first_ids)
-        elif type == "nltk":
+        elif type in ["nltk", "jieba"]:
             # ignore first two cls token and the last sep token
             wps_valid = []
             for i in range(len(wps)):
@@ -173,7 +174,10 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             wps_valid.append(tokenizer.sep_token)
             wps = wps_valid
             text = "".join(wps[2:-1]).replace("\u0120", " ")
-            tokens = nltk.word_tokenize(text)
+            if type == "nltk":
+                tokens = nltk.word_tokenize(text)
+            else:
+                tokens = jieba.cut(text)
             #if debug:
             #    print ("text:\n", text)
             #    print ("tokens:\n", tokens)
@@ -399,7 +403,7 @@ class SDPParser(object):
         with torch.no_grad():
             self.network.eval()
             heads_pred, rels_pred = self.network.decode(first_ids, None, None, None, mask=masks, 
-                bpes=ids, first_idx=first_ids, input_elmo=None, lan_id=None, 
+                bpes=ids, first_idx=first_ids, input_elmo=None, lan_id=None,
                 leading_symbolic=NUM_SYMBOLIC_TAGS)
             rels_pred = rels_pred * heads_pred
             if debug:

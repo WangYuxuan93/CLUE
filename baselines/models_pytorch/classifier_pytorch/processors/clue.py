@@ -88,7 +88,12 @@ def clue_parsed_convert_examples_to_features(
 
     label_map = {label: i for i, label in enumerate(label_list)}
 
-    features = []
+    
+    input_ids_list = []
+    attention_mask_list = []
+    token_type_ids_list = []
+    input_len_list = []
+
     for (ex_index, example) in enumerate(examples):
         if ex_index % 10000 == 0:
             logger.info("Writing example %d" % (ex_index))
@@ -121,6 +126,26 @@ def clue_parsed_convert_examples_to_features(
                                                                                             max_length)
         assert len(token_type_ids) == max_length, "Error with input length {} vs {}".format(len(token_type_ids),
                                                                                             max_length)
+        input_ids_list.append(input_ids)
+        attention_mask_list.append(attention_mask)
+        token_type_ids_list.append(token_type_ids)
+        input_len_list.append(input_len)
+    
+    heads, rels = parser.parse_bpes(
+                    input_ids_list,
+                    attention_mask_list,
+                    has_b=examples[0].text_b is not None,
+                    expand_type=expand_type,
+                    max_length=max_length, 
+                    align_type=align_type, 
+                    return_tensor=return_tensor, 
+                    sep_token_id=tokenizer.sep_token_id)
+
+    if compute_dist:
+        dists = compute_distance(heads, attention_mask_list)
+
+    features = []
+    for i, example in enumerate(examples):
         if output_mode == "classification":
             label = label_map[example.label]
         elif output_mode == "regression":
@@ -128,36 +153,38 @@ def clue_parsed_convert_examples_to_features(
         else:
             raise KeyError(output_mode)
 
-        heads, rels = parser.parse_bpes(
-                        input_ids,
-                        attention_mask,
-                        has_b=examples[0].text_b is not None,
-                        expand_type=expand_type,
-                        max_length=max_length, 
-                        align_type=align_type, 
-                        return_tensor=return_tensor, 
-                        sep_token_id=tokenizer.sep_token_id)
-
-        if ex_index < 5:
+        if i < 5:
             logger.info("*** Example ***")
             logger.info("guid: %s" % (example.guid))
-            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
-            logger.info("token_type_ids: %s" % " ".join([str(x) for x in token_type_ids]))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids_list[i]]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask_list[i]]))
+            logger.info("token_type_ids: %s" % " ".join([str(x) for x in token_type_ids_list[i]]))
             logger.info("label: %s (id = %d)" % (example.label, label))
-            logger.info("input length: %d" % (input_len))
-            print ("\nheads:\n", heads)
-            print ("\nrels:\n", rels)
-            exit()
+            logger.info("input length: %d" % (input_len_list[i]))
+            torch.set_printoptions(profile="full")
+            print ("\nheads:\n", heads[i])
+            print ("\nrels:\n", rels[i])
+            print ("\ndists:\n", dists[i])
 
-        features.append(
-            InputParsedFeatures(input_ids=input_ids,
-                          attention_mask=attention_mask,
-                          token_type_ids=token_type_ids,
-                          label=label,
-                          input_len=input_len,
-                          heads=heads,
-                          rels=rels))
+        if compute_dist:
+            features.append(
+                InputParsedFeatures(input_ids=input_ids_list[i],
+                              attention_mask=attention_mask_list[i],
+                              token_type_ids=token_type_ids_list[i],
+                              label=label,
+                              input_len=input_len_list[i],
+                              heads=heads[i],
+                              rels=rels[i],
+                              dists=dists[i]))
+        else:
+            features.append(
+                InputParsedFeatures(input_ids=input_ids_list[i],
+                              attention_mask=attention_mask_list[i],
+                              token_type_ids=token_type_ids_list[i],
+                              label=label,
+                              input_len=input_len_list[i],
+                              heads=heads[i],
+                              rels=rels[i]))
     return features
 
 
@@ -244,6 +271,7 @@ def clue_convert_examples_to_features(examples, tokenizer,
 
         if ex_index < 5:
             logger.info("*** Example ***")
+            #print (example.text_a)
             logger.info("guid: %s" % (example.guid))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
             logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
@@ -258,6 +286,39 @@ def clue_convert_examples_to_features(examples, tokenizer,
                           label=label,
                           input_len=input_len))
     return features
+
+
+def floyd(heads, max_len):
+    INF = 1e8
+    inf = torch.ones_like(heads, device=heads.device, dtype=heads.dtype) * INF
+    # replace 0 with infinite
+    dist = torch.where(heads==0, inf.long(), heads.long())
+    for k in range(max_len):
+        for i in range(max_len):
+            for j in range(max_len):
+                if dist[i][k] != INF and dist[k][j] != INF and dist[i][j] > dist[i][k] + dist[k][j]:
+                    dist[i][j] = dist[i][k] + dist[k][j]
+    zero = torch.zeros_like(heads, device=heads.device).long()
+    dist = torch.where(dist==INF, zero, dist)
+    return dist
+
+def compute_distance(heads, mask, debug=False):
+    if debug:
+        torch.set_printoptions(profile="full")
+
+    lengths = [sum(m) for m in mask]
+    dists = []
+    # for each sentence
+    for i in range(len(heads)):
+        if debug:
+            print ("heads:\n", heads[i])
+            print ("mask:\n", mask[i])
+            print ("lengths:\n", lengths[i])
+        dist = floyd(heads[i], lengths[i])
+        dists.append(dist)
+        if debug:
+            print ("dist:\n", dist)
+    return dists
 
 
 class TnewsProcessor(DataProcessor):

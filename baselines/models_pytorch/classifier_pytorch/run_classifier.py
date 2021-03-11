@@ -24,11 +24,11 @@ from transformers import (WEIGHTS_NAME, BertConfig,
                           XLNetTokenizer,
                           AlbertForSequenceClassification)
 
-from transformers import AdamW, WarmupLinearSchedule
+from transformers import AdamW, get_linear_schedule_with_warmup
 from metrics.clue_compute_metrics import compute_metrics
 from processors import clue_output_modes as output_modes
 from processors import clue_processors as processors
-from processors import clue_convert_examples_to_features# as convert_examples_to_features
+from processors import clue_convert_examples_to_features, clue_parsed_convert_examples_to_features
 from processors import collate_fn, xlnet_collate_fn
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
@@ -37,8 +37,8 @@ from tools.progressbar import ProgressBar
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 
-ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig,
-                                                                                RobertaConfig)), ())
+#ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig,
+#                                                                                RobertaConfig)), ())
 MODEL_CLASSES = {
     ## bert ernie bert_wwm bert_wwwm_ext
     'bert': (BertConfig, BertForSequenceClassification, BertTokenizer),
@@ -69,7 +69,10 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
+    scheduler = get_linear_schedule_with_warmup(
+                    optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
+            )
+    #WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
     if args.fp16:
         try:
             from apex import amp
@@ -363,6 +366,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
                                                     compute_dist=args.parser_compute_dist
                                                     )
     
+            del biaffine_parser
 
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
@@ -379,7 +383,21 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
         all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
     elif output_mode == "regression":
         all_labels = torch.tensor([f.label for f in features], dtype=torch.float)
-    dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels)
+
+
+    if args.parser_model is None:
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels)
+    else:
+        all_heads = torch.tensor([f.heads for f in features], dtype=torch.long)
+        all_rels = torch.tensor([f.rels for f in features], dtype=torch.long)
+        if args.parser_compute_dist:
+            all_dists = torch.tensor([f.dists for f in features], dtype=torch.long)
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels, 
+                                    all_heads, all_rels, all_dists)
+        else:
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels, 
+                                    all_heads, all_rels)
+
     return dataset
 
 
@@ -392,8 +410,7 @@ def main():
     parser.add_argument("--model_type", default=None, type=str, required=True,
                         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
-                        help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(
-                            ALL_MODELS))
+                        help="Path to pre-trained model or shortcut name")
     parser.add_argument("--task_name", default=None, type=str, required=True,
                         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()))
     parser.add_argument("--output_dir", default=None, type=str, required=True,
@@ -404,7 +421,7 @@ def main():
     parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
     parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp"], help="Type of the parser")
     parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word"], help="Policy to expand parses")
-    parser.add_argument("--parser_align_type", default="nltk", type=str, choices=["nltk","rule"], help="Policy to align subwords in parser")
+    parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","nltk","rule"], help="Policy to align subwords in parser")
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
 
