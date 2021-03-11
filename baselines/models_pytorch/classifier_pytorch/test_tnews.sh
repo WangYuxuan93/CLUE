@@ -28,6 +28,7 @@ if [ $# == 0 ]; then
       --model_type=bert \
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
+      --config_name=data/sbertv2.json \
       --parser_model=$PARSER_MODEL \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
       --parser_compute_dist \

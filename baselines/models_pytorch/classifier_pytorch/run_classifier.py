@@ -36,6 +36,7 @@ from tools.progressbar import ProgressBar
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
+from transformers import StructuredBertV2Config, StructuredBertV2ForSequenceClassification
 
 #ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig,
 #                                                                                RobertaConfig)), ())
@@ -47,6 +48,41 @@ MODEL_CLASSES = {
     'albert': (BertConfig, AlbertForSequenceClassification, BertTokenizer)
 }
 
+
+def _prepare_inputs(inputs, device, use_dist=False, debug=False):
+
+    #print ("inputs:\n", inputs)
+    
+    for k, v in inputs.items():
+            if isinstance(v, torch.Tensor):
+                inputs[k] = v.to(device)
+
+    #if "first_indices" in inputs:
+    #    del inputs["first_indices"]
+    if "heads" in inputs and inputs["heads"] is not None:
+        if use_dist:
+            if "dists" not in inputs:
+                raise ValueError("Distance matrix not provided!")
+                exit()
+            #torch.set_printoptions(profile="full")
+            #print ("dists:\n", inputs["dists"])
+            one = torch.ones_like(inputs["dists"]).float()
+            zero = torch.zeros_like(inputs["dists"]).float()
+            ones = torch.where(inputs["dists"]==0,zero,one)
+            dists = torch.where(inputs["dists"]==0,one,inputs["dists"].float())
+            dists = ones / dists.float()
+            inputs["heads"] = dists
+            del inputs["dists"]
+            #print ("heads:\n", inputs["heads"])
+        else:
+            inputs["heads"] = inputs["heads"].float()
+            del inputs["dists"]
+    else:
+        del inputs["heads"]
+        del inputs["rels"]
+        del inputs["dists"]
+
+    return inputs
 
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
@@ -109,13 +145,18 @@ def train(args, train_dataset, model, tokenizer):
         pbar = ProgressBar(n_total=len(train_dataloader), desc='Training')
         for step, batch in enumerate(train_dataloader):
             model.train()
-            batch = tuple(t.to(args.device) for t in batch)
+            #batch = tuple(t.to(args.device) for t in batch)
+            inputs = _prepare_inputs(batch, args.device)
+            #print ("batch:\n", batch)
+            """
             inputs = {'input_ids': batch[0],
                       'attention_mask': batch[1],
                       'labels': batch[3]}
             if args.model_type != 'distilbert':
                 inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet', 'albert',
                                                                            'roberta'] else None  # XLM, DistilBERT don't use segment_ids
+            """
+
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
@@ -187,14 +228,17 @@ def evaluate(args, model, tokenizer, prefix=""):
         pbar = ProgressBar(n_total=len(eval_dataloader), desc="Evaluating")
         for step, batch in enumerate(eval_dataloader):
             model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
+            #batch = tuple(t.to(args.device) for t in batch)
             with torch.no_grad():
+                inputs = _prepare_inputs(batch, args.device)
+                """
                 inputs = {'input_ids': batch[0],
                           'attention_mask': batch[1],
                           'labels': batch[3]}
                 if args.model_type != 'distilbert':
                     inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet', 'albert',
                                                                                'roberta'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
+                """
                 outputs = model(**inputs)
                 tmp_eval_loss, logits = outputs[:2]
                 eval_loss += tmp_eval_loss.mean().item()
@@ -249,14 +293,17 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         pbar = ProgressBar(n_total=len(pred_dataloader), desc="Predicting")
         for step, batch in enumerate(pred_dataloader):
             model.eval()
-            batch = tuple(t.to(args.device) for t in batch)
+            #batch = tuple(t.to(args.device) for t in batch)
             with torch.no_grad():
+                """
                 inputs = {'input_ids': batch[0],
                           'attention_mask': batch[1],
                           'labels': batch[3]}
                 if args.model_type != 'distilbert':
                     inputs['token_type_ids'] = batch[2] if (
                             'bert' in args.model_type or 'xlnet' in args.model_type) else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
+                """
+                inputs = _prepare_inputs(batch, args.device)
                 outputs = model(**inputs)
                 _, logits = outputs[:2]
             nb_pred_steps += 1
@@ -306,11 +353,25 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
     processor = processors[task]()
     output_mode = output_modes[task]
     # Load data features from cache or dataset file
-    cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
-        data_type,
-        list(filter(None, args.model_name_or_path.split('/'))).pop(),
-        str(args.max_seq_length),
-        str(task)))
+    if args.parser_model is None:
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
+            data_type,
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            str(args.max_seq_length),
+            str(task)))
+    else:
+        parser_info = os.path.basename(args.parser_model)
+        if args.parser_return_tensor:
+            parser_info += "-3d"
+        if args.parser_compute_dist:
+            parser_info += "-dist"
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}'.format(
+            data_type,
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            str(args.max_seq_length),
+            str(task),
+            parser_info,
+            args.parser_expand_type))
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
@@ -388,10 +449,10 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
     if args.parser_model is None:
         dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels)
     else:
-        all_heads = torch.tensor([f.heads for f in features], dtype=torch.long)
-        all_rels = torch.tensor([f.rels for f in features], dtype=torch.long)
+        all_heads = torch.stack([f.heads for f in features])
+        all_rels = torch.stack([f.rels for f in features])
         if args.parser_compute_dist:
-            all_dists = torch.tensor([f.dists for f in features], dtype=torch.long)
+            all_dists = torch.stack([f.dists for f in features])
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels, 
                                     all_heads, all_rels, all_dists)
         else:
@@ -543,14 +604,28 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    args.model_type = args.model_type.lower()
-    config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
-                                          num_labels=num_labels, finetuning_task=args.task_name)
-    tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-                                                do_lower_case=args.do_lower_case)
-    model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path),
-                                        config=config)
+    if args.parser_model is not None:
+        config = StructuredBertV2Config.from_json_file(
+                        args.config_name if args.config_name else args.model_name_or_path)
+        config.num_labels=num_labels
+
+        tokenizer = BertTokenizer.from_pretrained(
+                        args.tokenizer_name if args.tokenizer_name else args.model_name_or_path)
+        #config.num_rel_labels = train_dataset.conll_label_vocab_size() if train_dataset is not None else eval_dataset.conll_label_vocab_size()
+        #config.use_reverse_rel = train_dataset.use_reverse_conll_label if train_dataset is not None else eval_dataset.use_reverse_conll_label
+        model = StructuredBertV2ForSequenceClassification.from_pretrained(
+                        args.model_name_or_path, config=config)
+        model_class = StructuredBertV2ForSequenceClassification
+        tokenizer_class = BertTokenizer
+    else:
+        args.model_type = args.model_type.lower()
+        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+                                              num_labels=num_labels, finetuning_task=args.task_name)
+        tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
+                                                    do_lower_case=args.do_lower_case)
+        model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path),
+                                            config=config)
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab

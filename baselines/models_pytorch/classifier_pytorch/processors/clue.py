@@ -18,12 +18,35 @@ def collate_fn(batch):
     batch should be a list of (sequence, target, length) tuples...
     Returns a padded tensor of sequences sorted from longest to shortest,
     """
-    all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels = map(torch.stack, zip(*batch))
+    num_items = len(batch[0])
+    all_heads, all_rels, all_dists = None, None, None
+    if num_items == 5:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels = map(torch.stack, zip(*batch))
+    elif num_items == 7:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 8:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_lens, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
     max_len = max(all_lens).item()
     all_input_ids = all_input_ids[:, :max_len]
     all_attention_mask = all_attention_mask[:, :max_len]
     all_token_type_ids = all_token_type_ids[:, :max_len]
-    return all_input_ids, all_attention_mask, all_token_type_ids, all_labels
+    if num_items >= 7:
+        all_heads = all_heads[:, :max_len, :max_len]
+        all_rels = all_rels[:, :max_len, :max_len]
+    if num_items == 8:
+        all_dists = all_dists[:, :max_len, :max_len]
+    
+    batch = {}
+    batch["input_ids"] = all_input_ids
+    batch["attention_mask"] = all_attention_mask
+    batch["token_type_ids"] = all_token_type_ids
+    batch["labels"] = all_labels
+    batch["heads"] = all_heads
+    batch["rels"] = all_rels
+    batch["dists"] = all_dists
+    return batch
+
+    #return all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_heads, all_rels, all_dists
 
 
 def xlnet_collate_fn(batch):
