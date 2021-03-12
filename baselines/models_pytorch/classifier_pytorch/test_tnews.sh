@@ -42,8 +42,9 @@ if [ $# == 0 ]; then
       --per_gpu_eval_batch_size=16 \
       --learning_rate=2e-5 \
       --num_train_epochs=3.0 \
-      --logging_steps=3335 \
-      --save_steps=3335 \
+      --max_steps=15 \
+      --logging_steps=3 \
+      --save_steps=3 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
       --overwrite_output_dir \
       --seed=42

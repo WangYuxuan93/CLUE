@@ -37,6 +37,9 @@ from tools.progressbar import ProgressBar
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 from transformers import StructuredBertV2Config, StructuredBertV2ForSequenceClassification
+import shutil
+import re
+from pathlib import Path
 
 #ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig,
 #                                                                                RobertaConfig)), ())
@@ -83,6 +86,33 @@ def _prepare_inputs(inputs, device, use_dist=False, debug=False):
         del inputs["dists"]
 
     return inputs
+
+def delete_old_checkpoints(output_dir, best_checkpoint, save_limit=1):
+    # delete old checkpoints other than the best
+    ordering_and_checkpoint_path = []
+
+    glob_checkpoints = [str(x) for x in Path(output_dir).glob(f"checkpoint-*")]
+
+    for path in glob_checkpoints:
+        regex_match = re.match(f".*checkpoint-([0-9]+)", path)
+        if regex_match and regex_match.groups():
+            ordering_and_checkpoint_path.append((int(regex_match.groups()[0]), path))
+
+    checkpoints_sorted = sorted(ordering_and_checkpoint_path)
+    checkpoints_sorted = [checkpoint[1] for checkpoint in checkpoints_sorted]
+    
+    #print ("checkpoints:\n", checkpoints_sorted)
+    if best_checkpoint:
+        checkpoints_sorted.remove(best_checkpoint)
+        if save_limit == 1:
+            checkpoints_to_delete = checkpoints_sorted
+        else:
+            checkpoints_to_delete = checkpoints_sorted[:-save_limit+1]
+    else:
+        checkpoints_to_delete = checkpoints_sorted[:-save_limit]
+    for checkpoint in checkpoints_to_delete:
+        logger.info("Deleting older checkpoint [{}] due to save_limit".format(checkpoint))
+        shutil.rmtree(checkpoint)
 
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
@@ -141,7 +171,10 @@ def train(args, train_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     seed_everything(args.seed)  # Added here for reproductibility (even between python 2 and 3)
-    for _ in range(int(args.num_train_epochs)):
+    trainer_state = {'best_metric':0, 'best_checkpoint':None, 'epoch': int(args.num_train_epochs)}
+    log_history = []
+    steps_every_epoch = len(train_dataloader) / args.train_batch_size
+    for epoch in range(int(args.num_train_epochs)):
         pbar = ProgressBar(n_total=len(train_dataloader), desc='Training')
         for step, batch in enumerate(train_dataloader):
             model.train()
@@ -181,27 +214,48 @@ def train(args, train_dataset, model, tokenizer):
                 model.zero_grad()
                 global_step += 1
 
+                result = None
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     print(" ")
+                    log_history.append({'step': global_step, 'loss': loss.item()})
                     # Log metrics
                     if args.local_rank == -1:  # Only evaluate when single GPU otherwise metrics may not average well
-                        evaluate(args, model, tokenizer)
+                        logger.info("Epoch = {}, Global step = {}".format(epoch+float(step)/steps_every_epoch, global_step))
+                        result = evaluate(args, model, tokenizer)
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
-                    # Save model checkpoint
-                    output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    model_to_save = model.module if hasattr(model,
-                                                            'module') else model  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)
-                    torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-                    logger.info("Saving model checkpoint to %s", output_dir)
-                    tokenizer.save_vocabulary(vocab_path=output_dir)
+                    if result is not None:
+                        log_history.append({'step': global_step, 'eval_loss': result['eval_loss'], 
+                                            'eval_acc': result['acc']})
+                    if result is None or result['acc'] > trainer_state['best_metric']:
+                        # Save model checkpoint
+                        output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+                        if result is not None and result['acc'] > trainer_state['best_metric']:
+                                trainer_state['best_checkpoint'] = output_dir
+                                trainer_state['best_metric'] = result['acc']
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        model_to_save = model.module if hasattr(model,
+                                                                'module') else model  # Take care of distributed/parallel training
+                        model_to_save.save_pretrained(output_dir)
+                        torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                        logger.info("Saving model checkpoint to %s", output_dir)
+                        tokenizer.save_pretrained(output_dir)
+                        #tokenizer.save_vocabulary(vocab_path=output_dir)
+
+                        delete_old_checkpoints(args.output_dir, trainer_state['best_checkpoint'])
+
         print(" ")
         if 'cuda' in str(args.device):
             torch.cuda.empty_cache()
-    return global_step, tr_loss / global_step
+
+    trainer_state['global_step'] = global_step
+    trainer_state['log_history'] = log_history
+    state_path = os.path.join(args.output_dir, 'trainer_state.json')
+    with open(state_path, 'w') as f:
+        json.dump(trainer_state, f,indent=4)
+
+    return global_step, tr_loss / global_step, trainer_state['best_checkpoint']
 
 
 def evaluate(args, model, tokenizer, prefix=""):
@@ -259,6 +313,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         elif args.output_mode == "regression":
             preds = np.squeeze(preds)
         result = compute_metrics(eval_task, preds, out_label_ids)
+        result['eval_loss'] = eval_loss
         results.update(result)
         logger.info("  Num examples = %d", len(eval_dataset))
         logger.info("  Batch size = %d", args.eval_batch_size)
@@ -654,8 +709,11 @@ def main():
     # Training
     if args.do_train:
         train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, data_type='train')
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
+        global_step, tr_loss, best_checkpoint = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
+        if best_checkpoint is not None:
+            logger.info("Loading best model from: %s", best_checkpoint)
+            model = model.from_pretrained(best_checkpoint)
 
     # Saving best-practices: if you use defaults names for the model, you can reload it using from_pretrained()
     if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
