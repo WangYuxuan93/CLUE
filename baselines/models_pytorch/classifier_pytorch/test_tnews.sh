@@ -44,26 +44,30 @@ if [ $# == 0 ]; then
       --num_train_epochs=3.0 \
       --logging_steps=3335 \
       --save_steps=3335 \
-      --output_dir=$CURRENT_DIR/${TASK_NAME}_output/ \
+      --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
       --overwrite_output_dir \
       --seed=42
 elif [ $1 == "predict" ]; then
     echo "Start predict..."
     python run_classifier.py \
       --model_type=bert \
-      --model_name_or_path=$MODEL_NAME \
+      --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
+      --parser_model=$PARSER_MODEL \
+      --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
+      --parser_compute_dist \
+      --parser_return_tensor \
       --do_predict \
       --do_lower_case \
       --data_dir=$GLUE_DATA_DIR/${TASK_NAME}/ \
-      --max_seq_length=128 \
+      --max_seq_length=16 \
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=16 \
       --learning_rate=2e-5 \
       --num_train_epochs=3.0 \
       --logging_steps=3335 \
       --save_steps=3335 \
-      --output_dir=$CURRENT_DIR/${TASK_NAME}_output/ \
+      --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
       --overwrite_output_dir \
       --seed=42
 fi

@@ -462,6 +462,19 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
     return dataset
 
 
+def load_labels_from_json(path):
+    null_label = "_<PAD>"
+    word_label = "_<WORD>"
+    with open(path, 'r') as f:
+        data = json.load(f)
+        parser_label2id = data["instance2index"]
+    if null_label not in parser_label2id:
+        parser_label2id[null_label] = len(parser_label2id)
+    if word_label not in parser_label2id:
+        parser_label2id[word_label] = len(parser_label2id)
+    return parser_label2id
+
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -485,6 +498,7 @@ def main():
     parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","nltk","rule"], help="Policy to align subwords in parser")
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
+    parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
 
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,
@@ -556,7 +570,7 @@ def main():
 
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
-    args.output_dir = args.output_dir + '{}'.format(args.model_type)
+    args.output_dir = args.output_dir #+ '{}'.format(args.model_type)
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
     init_logger(log_file=args.output_dir + '/{}-{}.log'.format(args.model_type, args.task_name))
@@ -605,14 +619,20 @@ def main():
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     if args.parser_model is not None:
-        config = StructuredBertV2Config.from_json_file(
+        config = StructuredBertV2Config.from_pretrained(
                         args.config_name if args.config_name else args.model_name_or_path)
         config.num_labels=num_labels
 
         tokenizer = BertTokenizer.from_pretrained(
                         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path)
-        #config.num_rel_labels = train_dataset.conll_label_vocab_size() if train_dataset is not None else eval_dataset.conll_label_vocab_size()
-        #config.use_reverse_rel = train_dataset.use_reverse_conll_label if train_dataset is not None else eval_dataset.use_reverse_conll_label
+        config.use_reverse_rel = args.parser_use_reverse_label
+        label_path = os.path.join(args.parser_model, "alphabets/type.json")
+        parser_label2id = load_labels_from_json(label_path)
+        parser_label_embed_size = len(parser_label2id)
+        if args.parser_use_reverse_label:
+            parser_label_embed_size *= 2
+        config.num_rel_labels = parser_label_embed_size
+        
         model = StructuredBertV2ForSequenceClassification.from_pretrained(
                         args.model_name_or_path, config=config)
         model_class = StructuredBertV2ForSequenceClassification
