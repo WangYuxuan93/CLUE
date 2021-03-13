@@ -3,10 +3,11 @@ import sys
 import gc
 import json
 import nltk
+import jieba
 
-current_path = os.path.dirname(os.path.realpath(__file__))
-root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-sys.path.append(root_path)
+#current_path = os.path.dirname(os.path.realpath(__file__))
+#root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+#sys.path.append(root_path)
 
 import time
 import argparse
@@ -16,12 +17,13 @@ import torch
 import random
 import string
 
-from neuronlp2.io import conllx_data
-#from neuronlp2.models.biaffine_parser import BiaffineParser
+from .io import conllx_data
+from .models.biaffine_parser import BiaffineParser
 from transformers import AutoTokenizer
 
-from transformers.utils import logging
-logger = logging.get_logger(__name__)
+import logging
+#logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 PAD = "_PAD"
 ROOT = "_ROOT"
@@ -143,7 +145,7 @@ def get_valid_wp(wps, idx):
     return wp, idx
 
 
-def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
+def get_first_ids(tokenizer, input_ids, type="jieba", debug=False):
     # type (nltk: use nltk word_tokenize to align|rule: use rule to align)
 
     first_ids_list = []
@@ -161,7 +163,7 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             first_ids_list.append(first_ids)
             #print ("wps:\n", wps)
             #print ("first_ids:\n", first_ids)
-        elif type == "nltk":
+        elif type in ["nltk", "jieba"]:
             # ignore first two cls token and the last sep token
             wps_valid = []
             for i in range(len(wps)):
@@ -172,7 +174,10 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             wps_valid.append(tokenizer.sep_token)
             wps = wps_valid
             text = "".join(wps[2:-1]).replace("\u0120", " ")
-            tokens = nltk.word_tokenize(text)
+            if type == "nltk":
+                tokens = nltk.word_tokenize(text)
+            else:
+                tokens = jieba.cut(text)
             if debug:
                 print ("text:\n", text)
                 print ("tokens:\n", tokens)
@@ -382,7 +387,7 @@ class Parser(object):
         return heads, rels
 
     def parse_bpes(self, input_ids, masks, batch_size=None,has_b=False,expand_type="copy",
-                    max_length=512, align_type="nltk", return_tensor=False, sep_token_id=2, **kwargs):
+                    max_length=512, align_type="jieba", return_tensor=False, sep_token_id=2, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
         
         first_ids_list = []

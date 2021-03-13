@@ -418,7 +418,7 @@ class SDPParser(object):
         return heads, rels
 
     def parse_bpes(self, input_ids, masks, batch_size=None,has_b=False,expand_type="copy",
-                    max_length=512, align_type="nltk", return_tensor=True, **kwargs):
+                    max_length=512, align_type="jieba", return_tensor=True, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
         
         first_ids_list = []
