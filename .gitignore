@@ -16,3 +16,5 @@ prev_trained_model
 .idea/CLUE.iml
 .idea/misc.iml
 __pycache__
+baselines/models_pytorch/mrc_pytorch/mrc_data/*
+baselines/models_pytorch/classifier_pytorch/CLUEdatasets/*

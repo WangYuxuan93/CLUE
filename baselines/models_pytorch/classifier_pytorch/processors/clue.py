@@ -286,6 +286,9 @@ def clue_convert_examples_to_features(examples, tokenizer,
         assert len(token_type_ids) == max_length, "Error with input length {} vs {}".format(len(token_type_ids),
                                                                                             max_length)
         if output_mode == "classification":
+            if example.label not in label_map:
+                logger.info("example-{} label:{} not in label_map".format(example.guid, example.label))
+                continue
             label = label_map[example.label]
         elif output_mode == "regression":
             label = float(example.label)
@@ -486,7 +489,7 @@ class CmnliProcessor(DataProcessor):
             guid = "%s-%s" % (set_type, i)
             text_a = line["sentence1"]
             text_b = line["sentence2"]
-            label = str(line["gold_label"]) if set_type != 'test' else 'neutral'
+            label = str(line["label"]) if set_type != 'test' else 'neutral'
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
