@@ -267,12 +267,14 @@ def split_ids(tokenizer, input_ids):
     sep_id = tokenizer.sep_token_id
     cls_id = tokenizer.cls_token_id
     input_ids_list_a, input_ids_list_b = [], []
+
+    # input_ids: [CLS] ... [SEP] ... [SEP]
     for ids in input_ids:
         #print ("ids:\n", ids)
         sep_index = ids.index(sep_id)
         # [CLS] [CLS] ... [SEP] , the second cls is for root
         input_ids_list_a.append([cls_id]+ids[:sep_index]+[sep_id])
-        input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+2:])
+        input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+1:])
         #print ("ids_a:\n", input_ids_list_a[-1])
         #print ("ids_b:\n", input_ids_list_b[-1])
 
@@ -285,9 +287,8 @@ def split_ids(tokenizer, input_ids):
     return inputs_a, inputs_b, input_ids_list_a, input_ids_list_b
 
 
-def merge_first_ids(ids, ids_a, first_ids_a, ids_b=None, first_ids_b=None, debug=False):
-    pad_id = 0
-    sep_id = 2
+def merge_first_ids(tokenizer, ids, ids_a, first_ids_a, ids_b=None, first_ids_b=None, debug=False):
+    sep_id = tokenizer.sep_token_id
     first_ids_list = []
     for i in range(len(ids_a)):
         #print (ids_a)
@@ -295,13 +296,17 @@ def merge_first_ids(ids, ids_a, first_ids_a, ids_b=None, first_ids_b=None, debug
         # minus 1 for removing the root token
         first_ids = [x-1 for x in first_ids_a[i]] + [len(merge_ids)-1]
         if ids_b is not None:
-            first_ids += [x-1+len(merge_ids) for x in first_ids_b[i]]
-            merge_ids += [sep_id] + ids_b[i][2:]
+            # x -1 for rm the [CLS] of ids_b, offset = len(merge_ids)-1
+            first_ids += [x-1+len(merge_ids)-1 for x in first_ids_b[i][1:]]
+            # only 1 [SEP] for chinese bert/roberta
+            merge_ids += ids_b[i][2:]
             first_ids += [len(merge_ids)-1]
         if debug:
             print ("ids_a:\n{}".format(ids_a[i]))
+            print ("first_ids_a:\n",first_ids_a)
             if ids_b is not None:
                 print ("ids_b:\n{}".format(ids_b[i]))
+                print ("first_ids_b:\n",first_ids_b)
             print ("first_ids:\n",first_ids)
             print ("merge_ids:\n", merge_ids)
             print ("ids:\n", ids[i])
@@ -318,7 +323,7 @@ def first_ids_to_map(first_ids, lengths, debug=False):
         wid2wpid = {}
         wpid2wid = {}
         # first id starts from 1 (exclude cls token)
-        # ends l-1 (exclude sep token)
+        # ends l-1 (exclu/de sep token)
         for i in range(l):
             if i in fids:
                 wid2wpid[len(wid2wpid)] = [i]
@@ -406,12 +411,16 @@ class SDPParser(object):
                 bpes=ids, first_idx=first_ids, input_elmo=None, lan_id=None,
                 leading_symbolic=NUM_SYMBOLIC_TAGS)
             rels_pred = rels_pred * heads_pred
-            if debug:
-                print ("ids:\n", ids)
-                print ("first_ids:\n", first_ids)
-                print ("heads_pred:\n", heads_pred)
-                print ("rels_pred:\n", rels_pred)
+            #if debug:
+            #    print ("ids:\n", ids)
+            #    print ("first_ids:\n", first_ids)
+            #    print ("heads_pred:\n", heads_pred)
+            #    print ("rels_pred:\n", rels_pred)
             for j, length in enumerate(lengths):
+                if debug:
+                    print ("len:\n", length)
+                    print ("heads_pred:\n", heads_pred[j])
+                    print ("rels_pred:\n", rels_pred[j])
                 heads.append(heads_pred[j][:length,:length])
                 rels.append(rels_pred[j][:length,:length])
                 #rels.append([self.rel_alphabet.get_instance(r) for r in rels_pred[j][1:length]])
@@ -461,7 +470,7 @@ class SDPParser(object):
                 heads_b_list.extend(heads_b)
                 rels_b_list.extend(rels_b)
 
-            first_ids = merge_first_ids(inputs_, input_ids_list_a, first_ids_a, input_ids_list_b, first_ids_b)
+            first_ids = merge_first_ids(self.tokenizer, inputs_, input_ids_list_a, first_ids_a, input_ids_list_b, first_ids_b)
             first_ids_list.extend(first_ids)
             heads_a_list.extend(heads_a)
             rels_a_list.extend(rels_a)
@@ -510,7 +519,8 @@ class SDPParser(object):
                         rels[mod_id][head_id] = label
 
             if heads_b:
-                offset = list(heads_a[i].size())[0] + 1
+                # here only 1 [SEP] in between, offset is (len_a-1) +1
+                offset = list(heads_a[i].size())[0] #+ 1
                 arc_indices = torch.nonzero(heads_b[i], as_tuple=False).detach().cpu().numpy()
                 for x,y in arc_indices:
                     label = rels_b[i][x][y]
