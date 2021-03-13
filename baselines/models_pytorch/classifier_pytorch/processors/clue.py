@@ -334,8 +334,11 @@ def compute_distance(heads, mask, debug=False):
 
     lengths = [sum(m) for m in mask]
     dists = []
+    logger.info("Start computing distance ...")
     # for each sentence
     for i in range(len(heads)):
+        if i % 100 == 0:
+            print ("%d..."%i, end="")
         if debug:
             print ("heads:\n", heads[i])
             print ("mask:\n", mask[i])
