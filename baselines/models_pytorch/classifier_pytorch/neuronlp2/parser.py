@@ -411,13 +411,14 @@ class Parser(object):
                 leading_symbolic=NUM_SYMBOLIC_TAGS)
             # convert to 3D
             if return_tensor:
+                masks = masks.cpu()
                 root_mask = torch.arange(seq_len).gt(0).float().unsqueeze(0) * masks
                 root_mask = masks * root_mask
                 # (batch, seq_len, seq_len)
                 mask_3D = (root_mask.unsqueeze(-1) * masks.unsqueeze(1)).long()
 
                 heads_tensor = torch.from_numpy(heads_pred).long()
-                rels_tensor = torch.from_numpy(rels_pred).long()
+                rels_tensor = torch.from_numpy(rels_pred).int()
                 heads_3D = torch.zeros((batch_size, seq_len, seq_len), dtype=torch.long)
                 heads_3D.scatter_(-1, heads_tensor.unsqueeze(-1), 1)
                 heads_3D = heads_3D * mask_3D
