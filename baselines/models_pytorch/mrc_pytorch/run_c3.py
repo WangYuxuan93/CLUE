@@ -28,14 +28,16 @@ import random
 
 import numpy as np
 import torch
-from google_albert_pytorch_modeling import AlbertConfig, AlbertForMultipleChoice
-from pytorch_modeling import BertConfig, BertForMultipleChoice, ALBertConfig, ALBertForMultipleChoice
+#from google_albert_pytorch_modeling import AlbertConfig, AlbertForMultipleChoice
+#from pytorch_modeling import BertConfig, BertForMultipleChoice, ALBertConfig, ALBertForMultipleChoice
 from tools import official_tokenization as tokenization
 from tools import utils
 from tools.pytorch_optimization import get_optimization, warmup_linear
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
+
+from transformers import (BertConfig, BertForMultipleChoice, BertTokenizer)
 
 n_class = 4
 reverse_order = False
@@ -77,6 +79,17 @@ class InputFeatures(object):
         self.segment_ids = segment_ids
         self.label_id = label_id
 
+class InputParsedFeatures(object):
+    """A single set of features of data."""
+
+    def __init__(self, input_ids, input_mask, segment_ids, label_id, heads, rels, dists=None):
+        self.input_ids = input_ids
+        self.input_mask = input_mask
+        self.segment_ids = segment_ids
+        self.label_id = label_id
+        self.heads = heads
+        self.rels = rels
+        self.dists = dists
 
 class DataProcessor(object):
     """Base class for data converters for sequence classification data sets."""
@@ -124,7 +137,11 @@ class c3Processor(DataProcessor):
                         d += [data[i][1][j]["choice"][k].lower()]
                     for k in range(len(data[i][1][j]["choice"]), 4):
                         d += ['无效答案']  # 有些C3数据选项不足4个，添加[无效答案]能够有效增强模型收敛稳定性
-                    d += [data[i][1][j]["answer"].lower()]
+                    if sid in [0, 1]:
+                        d += [data[i][1][j]["answer"].lower()]
+                    else:
+                        # for test set we pick the last choice as answer
+                        d += [d[-1]]
                     self.D[sid] += [d]
 
     def get_train_examples(self):
@@ -170,6 +187,116 @@ class c3Processor(DataProcessor):
                 pickle.dump(examples, w)
 
         return examples
+
+
+def convert_parsed_examples_to_features(
+    examples,
+    label_list, 
+    max_seq_length, 
+    tokenizer,
+    parser,
+    expand_type="word",
+    align_type="nltk",
+    return_tensor=True,
+    compute_dist=False
+    ):
+    
+    print("#examples", len(examples))
+
+    label_map = {}
+    for (i, label) in enumerate(label_list):
+        label_map[label] = i
+
+    input_ids_list = []
+    input_mask_list = []
+    segment_ids_list = []
+    for (ex_index, example) in enumerate(tqdm(examples)):
+        tokens_a = tokenizer.tokenize(example.text_a)
+
+        tokens_b = tokenizer.tokenize(example.text_b)
+
+        tokens_c = tokenizer.tokenize(example.text_c)
+
+        _truncate_seq_tuple(tokens_a, tokens_b, tokens_c, max_seq_length - 4)
+        tokens_b = tokens_c + ["[SEP]"] + tokens_b
+
+        tokens = []
+        segment_ids = []
+        tokens.append("[CLS]")
+        segment_ids.append(0)
+        for token in tokens_a:
+            tokens.append(token)
+            segment_ids.append(0)
+        tokens.append("[SEP]")
+        segment_ids.append(0)
+
+        if tokens_b:
+            for token in tokens_b:
+                tokens.append(token)
+                segment_ids.append(1)
+            tokens.append("[SEP]")
+            segment_ids.append(1)
+
+        input_ids = tokenizer.convert_tokens_to_ids(tokens)
+
+        # The mask has 1 for real tokens and 0 for padding tokens. Only real
+        # tokens are attended to.
+        input_mask = [1] * len(input_ids)
+
+        # Zero-pad up to the sequence length.
+        while len(input_ids) < max_seq_length:
+            input_ids.append(0)
+            input_mask.append(0)
+            segment_ids.append(0)
+
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+
+        label_id = label_map[example.label]
+
+        input_ids_list.append(input_ids)
+        input_mask_list.append(input_mask)
+        segment_ids_list.append(segment_ids)
+        
+
+    heads, rels = parser.parse_bpes(
+                input_ids_list,
+                input_mask_list,
+                has_b=examples[0].text_b is not None,
+                has_c=examples[0].text_c is not None,
+                expand_type=expand_type,
+                max_length=max_seq_length, 
+                align_type=align_type, 
+                return_tensor=return_tensor, 
+                sep_token_id=tokenizer.sep_token_id)
+
+    features = [[]]
+    for i, example in enumerate(examples):
+        if ex_index < 5:
+            logger.info("*** Example ***")
+            logger.info("guid: %s" % (example.guid))
+            logger.info("tokens: %s" % " ".join(
+                [tokenization.printable_text(x) for x in tokens]))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            logger.info(
+                "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+            logger.info("label: %s (id = %d)" % (example.label, label_id))
+
+        features[-1].append(
+            InputFeatures(
+                input_ids=input_ids,
+                input_mask=input_mask,
+                segment_ids=segment_ids,
+                label_id=label_id))
+        if len(features[-1]) == n_class:
+            features.append([])
+
+    if len(features[-1]) == 0:
+        features = features[:-1]
+    print('#features', len(features))
+    return features
 
 
 def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer):
@@ -251,6 +378,144 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
     print('#features', len(features))
     return features
 
+def convert_and_cache_features(args, tokenizer, examples, data_type='train'):
+
+    task = args.task_name
+
+    processor = c3Processor(args.data_dir)
+    label_list = processor.get_labels()
+
+    if args.parser_model is None:
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}.pkl'.format(
+            data_type,
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            str(args.max_seq_length),
+            str(task)))
+    else:
+        parser_info = os.path.basename(args.parser_model)
+        if args.parser_return_tensor:
+            parser_info += "-3d"
+        if args.parser_compute_dist:
+            parser_info += "-dist"
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}.pkl'.format(
+            data_type,
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            str(args.max_seq_length),
+            str(task),
+            parser_info,
+            args.parser_expand_type))
+    if os.path.exists(cached_features_file):
+        logger.info("Loading features from cached file %s", cached_features_file)
+        #features = torch.load(cached_features_file)
+        features = pickle.load(open(cached_features_file, 'rb'))
+    else:
+        if args.parser_model is not None:
+            if args.parser_type == "dp":
+                biaffine_parser = Parser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                    batch_size=args.parser_batch, parser_type=args.parser_type)
+            elif args.parser_type == "sdp":
+                biaffine_parser = SDPParser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                    batch_size=args.parser_batch, parser_type=args.parser_type)
+        else:
+            biaffine_parser = None
+
+        logger.info("Creating features from dataset file at %s", args.data_dir)
+        if biaffine_parser is None:
+            features = convert_examples_to_features(examples, 
+                                                    label_list, 
+                                                    args.max_seq_length, 
+                                                    tokenizer)
+        else:
+            features = convert_parsed_examples_to_features(examples, 
+                                                    label_list, 
+                                                    args.max_seq_length, 
+                                                    tokenizer,
+                                                    biaffine_parser,
+                                                    expand_type=args.parser_expand_type,
+                                                    align_type=args.parser_align_type,
+                                                    return_tensor=args.parser_return_tensor,
+                                                    compute_dist=args.parser_compute_dist
+                                                    )
+    
+            del biaffine_parser
+
+        with open(cached_features_file, 'wb') as w:
+            pickle.dump(features, w)
+
+    return features
+
+def collate_fn(batch):
+    """
+    batch should be a list of (sequence, target, length) tuples...
+    Returns a padded tensor of sequences sorted from longest to shortest,
+    """
+    num_items = len(batch[0])
+    all_heads, all_rels, all_dists = None, None, None
+
+    if num_items == 4:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_labels = map(torch.stack, zip(*batch))
+    elif num_items == 6:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 7:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
+    
+    """
+    max_len = max(all_lens).item()
+    all_input_ids = all_input_ids[:, :max_len]
+    all_attention_mask = all_attention_mask[:, :max_len]
+    all_token_type_ids = all_token_type_ids[:, :max_len]
+    if num_items >= 6:
+        all_heads = all_heads[:, :max_len, :max_len]
+        all_rels = all_rels[:, :max_len, :max_len]
+    if num_items == 7:
+        all_dists = all_dists[:, :max_len, :max_len]
+    """
+    
+    batch = {}
+    batch["input_ids"] = all_input_ids
+    batch["attention_mask"] = all_attention_mask
+    batch["token_type_ids"] = all_token_type_ids
+    batch["labels"] = all_labels
+    batch["heads"] = all_heads
+    batch["rels"] = all_rels
+    batch["dists"] = all_dists
+    return batch
+
+def _prepare_inputs(inputs, device, use_dist=False, debug=False):
+
+    #print ("inputs:\n", inputs)
+    
+    for k, v in inputs.items():
+            if isinstance(v, torch.Tensor):
+                inputs[k] = v.to(device)
+
+    #if "first_indices" in inputs:
+    #    del inputs["first_indices"]
+    if "heads" in inputs and inputs["heads"] is not None:
+        if use_dist:
+            if "dists" not in inputs:
+                raise ValueError("Distance matrix not provided!")
+                exit()
+            #torch.set_printoptions(profile="full")
+            #print ("dists:\n", inputs["dists"])
+            one = torch.ones_like(inputs["dists"]).float()
+            zero = torch.zeros_like(inputs["dists"]).float()
+            ones = torch.where(inputs["dists"]==0,zero,one)
+            dists = torch.where(inputs["dists"]==0,one,inputs["dists"].float())
+            dists = ones / dists.float()
+            inputs["heads"] = dists
+            del inputs["dists"]
+            #print ("heads:\n", inputs["heads"])
+        else:
+            inputs["heads"] = inputs["heads"].float()
+            del inputs["dists"]
+    else:
+        del inputs["heads"]
+        del inputs["rels"]
+        del inputs["dists"]
+
+    return inputs
+
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
     """Truncates a sequence pair in place to the maximum length."""
@@ -297,109 +562,60 @@ def main():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
-    parser.add_argument("--gpu_ids",
-                        default='0',
-                        type=str,
-                        required=True)
-    parser.add_argument("--data_dir",
-                        default=None,
-                        type=str,
-                        required=True,
+    parser.add_argument("--gpu_ids", default='0', type=str, required=True)
+    parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
-    parser.add_argument("--task_name",
-                        default='c3',
-                        type=str,
-                        required=True)
-    parser.add_argument("--bert_config_file",
-                        default=None,
-                        type=str,
-                        required=True,
-                        help="The config json file corresponding to the pre-trained BERT model. \n"
-                             "This specifies the model architecture.")
-    parser.add_argument("--vocab_file",
-                        default=None,
-                        type=str,
-                        required=True,
-                        help="The vocabulary file that the BERT model was trained on.")
-    parser.add_argument("--output_dir",
-                        default=None,
-                        type=str,
-                        required=True,
+    parser.add_argument("--task_name", default='c3', type=str, required=True)
+    parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
+                        help="Path to pre-trained model or shortcut name")
+    parser.add_argument("--config_name", default="", type=str,
+                        help="Pretrained config name or path if not the same as model_name")
+    #parser.add_argument("--bert_config_file", default=None, type=str, required=True,
+    #                    help="The config json file corresponding to the pre-trained BERT model. \n"
+    #                         "This specifies the model architecture.")
+    #parser.add_argument("--vocab_file", default=None, type=str, required=True,
+    #                    help="The vocabulary file that the BERT model was trained on.")
+    parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model checkpoints will be written.")
 
+    ## SBERT parameters
+    parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
+    parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
+    parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
+    parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp"], help="Type of the parser")
+    parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word"], help="Policy to expand parses")
+    parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","nltk","rule"], help="Policy to align subwords in parser")
+    parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
+    parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
+    parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
+
     ## Other parameters
-    parser.add_argument("--init_checkpoint",
-                        default='check_points/pretrain_models/albert_xxlarge_google_zh_v1121/pytorch_model.pth',
-                        type=str,
-                        help="Initial checkpoint (usually from a pre-trained BERT model).")
-    parser.add_argument("--do_lower_case",
-                        default=True,
-                        action='store_true',
+    #parser.add_argument("--init_checkpoint", default='check_points/pretrain_models/albert_xxlarge_google_zh_v1121/pytorch_model.pth',
+    #                    type=str,
+    #                    help="Initial checkpoint (usually from a pre-trained BERT model).")
+    parser.add_argument("--do_lower_case", default=True, action='store_true',
                         help="Whether to lower case the input text. True for uncased models, False for cased models.")
-    parser.add_argument("--max_seq_length",
-                        default=512,
-                        type=int,
+    parser.add_argument("--max_seq_length", default=512, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
                              "than this will be padded.")
-    parser.add_argument("--do_train",
-                        default=False,
-                        action='store_true',
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval",
-                        default=False,
-                        action='store_true',
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--train_batch_size",
-                        default=16,
-                        type=int,
-                        help="Total batch size for training.")
-    parser.add_argument("--eval_batch_size",
-                        default=16,
-                        type=int,
-                        help="Total batch size for eval.")
-    parser.add_argument("--learning_rate",
-                        default=2e-5,
-                        type=float,
-                        help="The initial learning rate for Adam.")
-    parser.add_argument("--schedule",
-                        default='warmup_linear',
-                        type=str,
-                        help='schedule')
-    parser.add_argument("--weight_decay_rate",
-                        default=0.01,
-                        type=float,
-                        help='weight_decay_rate')
-    parser.add_argument('--clip_norm',
-                        type=float,
-                        default=1.0)
-    parser.add_argument("--num_train_epochs",
-                        default=8.0,
-                        type=float,
-                        help="Total number of training epochs to perform.")
-    parser.add_argument("--warmup_proportion",
-                        default=0.1,
-                        type=float,
+    parser.add_argument("--do_train", default=False, action='store_true', help="Whether to run training.")
+    parser.add_argument("--do_eval", default=False, action='store_true', help="Whether to run eval on the dev set.")
+    parser.add_argument("--train_batch_size", default=16, type=int, help="Total batch size for training.")
+    parser.add_argument("--eval_batch_size", default=16, type=int, help="Total batch size for eval.")
+    parser.add_argument("--learning_rate", default=2e-5, type=float, help="The initial learning rate for Adam.")
+    parser.add_argument("--schedule", default='warmup_linear', type=str, help='schedule')
+    parser.add_argument("--weight_decay_rate", default=0.01, type=float, help='weight_decay_rate')
+    parser.add_argument('--clip_norm', type=float, default=1.0)
+    parser.add_argument("--num_train_epochs", default=8.0, type=float, help="Total number of training epochs to perform.")
+    parser.add_argument("--warmup_proportion", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for. "
                              "E.g., 0.1 = 10%% of training.")
-    parser.add_argument("--no_cuda",
-                        default=False,
-                        action='store_true',
-                        help="Whether not to use CUDA when available")
-    parser.add_argument('--float16',
-                        action='store_true',
-                        default=False)
-    parser.add_argument("--local_rank",
-                        type=int,
-                        default=-1,
-                        help="local_rank for distributed training on gpus")
-    parser.add_argument('--seed',
-                        type=int,
-                        default=422,
-                        help="random seed for initialization")
-    parser.add_argument('--gradient_accumulation_steps',
-                        type=int,
-                        default=1,
+    parser.add_argument("--no_cuda", default=False, action='store_true', help="Whether not to use CUDA when available")
+    parser.add_argument('--float16', action='store_true', default=False)
+    parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
+    parser.add_argument('--seed', type=int, default=422, help="random seed for initialization")
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumualte before performing a backward/update pass.")
     parser.add_argument('--setting_file', type=str, default='setting.txt')
     parser.add_argument('--log_file', type=str, default='log.txt')
@@ -450,7 +666,7 @@ def main():
     processor = c3Processor(args.data_dir)
     label_list = processor.get_labels()
 
-    tokenizer = tokenization.BertTokenizer(vocab_file=args.vocab_file, do_lower_case=args.do_lower_case)
+    #tokenizer = tokenization.BertTokenizer(vocab_file=args.vocab_file, do_lower_case=args.do_lower_case)
 
     train_examples = None
     num_train_steps = None
@@ -458,7 +674,35 @@ def main():
         train_examples = processor.get_train_examples()
         num_train_steps = int(len(train_examples) / n_class / args.train_batch_size /
                               args.gradient_accumulation_steps * args.num_train_epochs)
+    
 
+    if args.parser_model is not None:
+        config = StructuredBertV2Config.from_pretrained(
+                        args.config_name if args.config_name else args.model_name_or_path)
+        #config.num_labels=num_labels
+
+        tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path, do_lower_case=args.do_lower_case)
+        config.use_reverse_rel = args.parser_use_reverse_label
+        label_path = os.path.join(args.parser_model, "alphabets/type.json")
+        parser_label2id = load_labels_from_json(label_path)
+        parser_label_embed_size = len(parser_label2id)
+        if args.parser_use_reverse_label:
+            parser_label_embed_size *= 2
+        config.num_rel_labels = parser_label_embed_size
+        
+        model = StructuredBertV2ForSequenceClassification.from_pretrained(
+                        args.model_name_or_path, config=config)
+    else:
+        config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
+        tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path, do_lower_case=args.do_lower_case)
+        model = BertForMultipleChoice.from_pretrained(args.model_name_or_path, config=config)
+
+    if args.max_seq_length > config.max_position_embeddings:
+        raise ValueError(
+            "Cannot use sequence length {} because the BERT model was only trained up to sequence length {}".format(
+                args.max_seq_length, config.max_position_embeddings))
+
+    """
     if 'albert' in args.bert_config_file:
         if 'google' in args.bert_config_file:
             bert_config = AlbertConfig.from_json_file(args.bert_config_file)
@@ -470,14 +714,10 @@ def main():
         bert_config = BertConfig.from_json_file(args.bert_config_file)
         model = BertForMultipleChoice(bert_config, num_choices=n_class)
 
-    if args.max_seq_length > bert_config.max_position_embeddings:
-        raise ValueError(
-            "Cannot use sequence length {} because the BERT model was only trained up to sequence length {}".format(
-                args.max_seq_length, bert_config.max_position_embeddings))
-
     if args.init_checkpoint is not None:
         utils.torch_show_all_params(model)
         utils.torch_init_model(model, args.init_checkpoint)
+    """
     if args.float16:
         model.half()
     model.to(device)
@@ -502,6 +742,8 @@ def main():
     eval_dataloader = None
     if args.do_eval:
         eval_examples = processor.get_dev_examples()
+        eval_features = convert_and_cache_features(args, tokenizer, eval_examples, data_type='eval')
+        """
         feature_dir = os.path.join(args.data_dir, 'dev_features{}.pkl'.format(args.max_seq_length))
         if os.path.exists(feature_dir):
             eval_features = pickle.load(open(feature_dir, 'rb'))
@@ -509,6 +751,7 @@ def main():
             eval_features = convert_examples_to_features(eval_examples, label_list, args.max_seq_length, tokenizer)
             with open(feature_dir, 'wb') as w:
                 pickle.dump(eval_features, w)
+        """
 
         input_ids = []
         input_mask = []
@@ -535,11 +778,14 @@ def main():
             eval_sampler = SequentialSampler(eval_data)
         else:
             eval_sampler = DistributedSampler(eval_data)
-        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size,
+                                    collate_fn=collate_fn)
 
     if args.do_train:
         best_accuracy = 0
 
+        train_features = convert_and_cache_features(args, tokenizer, train_examples, data_type='train')
+        """
         feature_dir = os.path.join(args.data_dir, 'train_features{}.pkl'.format(args.max_seq_length))
         if os.path.exists(feature_dir):
             train_features = pickle.load(open(feature_dir, 'rb'))
@@ -547,6 +793,7 @@ def main():
             train_features = convert_examples_to_features(train_examples, label_list, args.max_seq_length, tokenizer)
             with open(feature_dir, 'wb') as w:
                 pickle.dump(train_features, w)
+        """
 
         logger.info("***** Running training *****")
         logger.info("  Num examples = %d", len(train_examples))
@@ -578,7 +825,7 @@ def main():
         else:
             train_sampler = DistributedSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size,
-                                      drop_last=True)
+                                      drop_last=True, collate_fn=collate_fn)
         steps_per_epoch = int(num_train_steps / args.num_train_epochs)
 
         for ie in range(int(args.num_train_epochs)):
@@ -587,9 +834,16 @@ def main():
             nb_tr_examples, nb_tr_steps = 0, 0
             with tqdm(total=int(steps_per_epoch), desc='Epoch %d' % (ie + 1)) as pbar:
                 for step, batch in enumerate(train_dataloader):
-                    batch = tuple(t.to(device) for t in batch)
-                    input_ids, input_mask, segment_ids, label_ids = batch
-                    loss = model(input_ids, segment_ids, input_mask, label_ids)
+                    inputs = _prepare_inputs(batch, device)
+                    #batch = tuple(t.to(device) for t in batch)
+                    #input_ids, input_mask, segment_ids, label_ids = batch
+                    #print ("input_ids:\n", input_ids)
+                    #print ("segment_ids:\n", segment_ids)
+                    #print ("input_mask:\n", input_mask)
+                    #print ("label_ids:\n", label_ids)
+
+                    outputs = model(**inputs)
+                    loss, logits = outputs[:2]
                     if n_gpu > 1:
                         loss = loss.mean()  # mean() to average on multi-gpu.
                     if args.gradient_accumulation_steps > 1:
@@ -607,7 +861,7 @@ def main():
                     else:
                         loss.backward()
 
-                    nb_tr_examples += input_ids.size(0)
+                    #nb_tr_examples += input_ids.size(0)
                     if (step + 1) % args.gradient_accumulation_steps == 0:
                         optimizer.step()  # We have accumulated enought gradients
                         model.zero_grad()
@@ -621,17 +875,23 @@ def main():
                 eval_loss, eval_accuracy = 0, 0
                 nb_eval_steps, nb_eval_examples = 0, 0
                 logits_all = []
-                for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader):
+                #for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader):
+                for step, batch in enumerate(eval_dataloader):
+                    inputs = _prepare_inputs(batch, device)
+                    """
                     input_ids = input_ids.to(device)
                     input_mask = input_mask.to(device)
                     segment_ids = segment_ids.to(device)
                     label_ids = label_ids.to(device)
+                    """
 
                     with torch.no_grad():
-                        tmp_eval_loss, logits = model(input_ids, segment_ids, input_mask, label_ids, return_logits=True)
+                        outputs = model(**inputs)
+                        tmp_eval_loss, logits = outputs[:2]
 
                     logits = logits.detach().cpu().numpy()
-                    label_ids = label_ids.cpu().numpy()
+                    #label_ids = label_ids.cpu().numpy()
+                    label_ids = inputs['labels'].detach().cpu().numpy()
                     for i in range(len(logits)):
                         logits_all += [logits[i]]
 
@@ -640,7 +900,7 @@ def main():
                     eval_loss += tmp_eval_loss.mean().item()
                     eval_accuracy += tmp_eval_accuracy
 
-                    nb_eval_examples += input_ids.size(0)
+                    nb_eval_examples += inputs["input_ids"].size(0)
                     nb_eval_steps += 1
 
                 eval_loss = eval_loss / nb_eval_steps
@@ -726,6 +986,8 @@ def main():
                         f.write(" ")
 
         test_examples = processor.get_test_examples()
+        test_features = convert_and_cache_features(args, tokenizer, test_examples, data_type='test')
+        """
         feature_dir = os.path.join(args.data_dir, 'test_features{}.pkl'.format(args.max_seq_length))
         if os.path.exists(feature_dir):
             test_features = pickle.load(open(feature_dir, 'rb'))
@@ -733,6 +995,7 @@ def main():
             test_features = convert_examples_to_features(test_examples, label_list, args.max_seq_length, tokenizer)
             with open(feature_dir, 'wb') as w:
                 pickle.dump(test_features, w)
+        """
 
         logger.info("***** Running testing *****")
         logger.info("  Num examples = %d", len(test_examples))
