@@ -163,13 +163,16 @@ def clue_parsed_convert_examples_to_features(
                     align_type=align_type, 
                     return_tensor=return_tensor, 
                     sep_token_id=tokenizer.sep_token_id)
-
+    dists = None
     if compute_dist:
         dists = compute_distance(heads, attention_mask_list)
 
     features = []
     for i, example in enumerate(examples):
         if output_mode == "classification":
+            if example.label not in label_map:
+                logger.info("example-{} label:{} not in label_map".format(example.guid, example.label))
+                continue
             label = label_map[example.label]
         elif output_mode == "regression":
             label = float(example.label)
@@ -187,7 +190,8 @@ def clue_parsed_convert_examples_to_features(
             torch.set_printoptions(profile="full")
             print ("\nheads:\n", heads[i])
             print ("\nrels:\n", rels[i])
-            print ("\ndists:\n", dists[i])
+            if dists:
+                print ("\ndists:\n", dists[i])
 
         if compute_dist:
             features.append(
@@ -337,7 +341,7 @@ def compute_distance(heads, mask, debug=False):
     logger.info("Start computing distance ...")
     # for each sentence
     for i in range(len(heads)):
-        if i % 100 == 0:
+        if i % 1 == 0:
             print ("%d..."%i, end="")
         if debug:
             print ("heads:\n", heads[i])
