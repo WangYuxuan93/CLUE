@@ -263,20 +263,21 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
     return first_ids, first_ids_list
 
 
-def split_ids(tokenizer, input_ids):
+def split_ids(tokenizer, input_ids, debug=False):
     sep_id = tokenizer.sep_token_id
     cls_id = tokenizer.cls_token_id
     input_ids_list_a, input_ids_list_b = [], []
 
     # input_ids: [CLS] ... [SEP] ... [SEP]
     for ids in input_ids:
-        #print ("ids:\n", ids)
         sep_index = ids.index(sep_id)
         # [CLS] [CLS] ... [SEP] , the second cls is for root
         input_ids_list_a.append([cls_id]+ids[:sep_index]+[sep_id])
         input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+1:])
-        #print ("ids_a:\n", input_ids_list_a[-1])
-        #print ("ids_b:\n", input_ids_list_b[-1])
+        if debug:
+            print ("ids:\n", ids)
+            print ("ids_a:\n", input_ids_list_a[-1])
+            print ("ids_b:\n", input_ids_list_b[-1])
 
     max_len_a = max([len(w) for w in input_ids_list_a])
     inputs_a = np.stack(
@@ -426,7 +427,7 @@ class SDPParser(object):
                 #rels.append([self.rel_alphabet.get_instance(r) for r in rels_pred[j][1:length]])
         return heads, rels
 
-    def parse_bpes(self, input_ids, masks, batch_size=None,has_b=False,expand_type="copy",
+    def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
                     max_length=512, align_type="jieba", return_tensor=True, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
         

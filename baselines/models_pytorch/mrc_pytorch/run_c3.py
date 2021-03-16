@@ -38,6 +38,10 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from transformers import (BertConfig, BertForMultipleChoice, BertTokenizer)
+from tools.train_utils import delete_old_checkpoints, load_labels_from_json
+from neuronlp2.parser import Parser
+from neuronlp2.sdp_parser import SDPParser
+from transformers import StructuredBertV2Config, StructuredBertV2ForMultipleChoice
 
 n_class = 4
 reverse_order = False
@@ -73,19 +77,19 @@ class InputExample(object):
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, label_id):
+    def __init__(self, input_ids, attention_mask, token_type_ids, label_id):
         self.input_ids = input_ids
-        self.input_mask = input_mask
-        self.segment_ids = segment_ids
+        self.attention_mask = attention_mask
+        self.token_type_ids = token_type_ids
         self.label_id = label_id
 
 class InputParsedFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, label_id, heads, rels, dists=None):
+    def __init__(self, input_ids, attention_mask, token_type_ids, label_id, heads, rels, dists=None):
         self.input_ids = input_ids
-        self.input_mask = input_mask
-        self.segment_ids = segment_ids
+        self.attention_mask = attention_mask
+        self.token_type_ids = token_type_ids
         self.label_id = label_id
         self.heads = heads
         self.rels = rels
@@ -188,6 +192,40 @@ class c3Processor(DataProcessor):
 
         return examples
 
+def floyd(heads, max_len):
+    INF = 1e8
+    inf = torch.ones_like(heads, device=heads.device, dtype=heads.dtype) * INF
+    # replace 0 with infinite
+    dist = torch.where(heads==0, inf.long(), heads.long())
+    for k in range(max_len):
+        for i in range(max_len):
+            for j in range(max_len):
+                if dist[i][k] != INF and dist[k][j] != INF and dist[i][j] > dist[i][k] + dist[k][j]:
+                    dist[i][j] = dist[i][k] + dist[k][j]
+    zero = torch.zeros_like(heads, device=heads.device).long()
+    dist = torch.where(dist==INF, zero, dist)
+    return dist
+
+def compute_distance(heads, mask, debug=False):
+    if debug:
+        torch.set_printoptions(profile="full")
+
+    lengths = [sum(m) for m in mask]
+    dists = []
+    logger.info("Start computing distance ...")
+    # for each sentence
+    for i in range(len(heads)):
+        if i % 1 == 0:
+            print ("%d..."%i, end="")
+        if debug:
+            print ("heads:\n", heads[i])
+            print ("mask:\n", mask[i])
+            print ("lengths:\n", lengths[i])
+        dist = floyd(heads[i], lengths[i])
+        dists.append(dist)
+        if debug:
+            print ("dist:\n", dist)
+    return dists
 
 def convert_parsed_examples_to_features(
     examples,
@@ -208,8 +246,9 @@ def convert_parsed_examples_to_features(
         label_map[label] = i
 
     input_ids_list = []
-    input_mask_list = []
-    segment_ids_list = []
+    attention_mask_list = []
+    token_type_ids_list = []
+    label_id_list = []
     for (ex_index, example) in enumerate(tqdm(examples)):
         tokens_a = tokenizer.tokenize(example.text_a)
 
@@ -221,48 +260,49 @@ def convert_parsed_examples_to_features(
         tokens_b = tokens_c + ["[SEP]"] + tokens_b
 
         tokens = []
-        segment_ids = []
+        token_type_ids = []
         tokens.append("[CLS]")
-        segment_ids.append(0)
+        token_type_ids.append(0)
         for token in tokens_a:
             tokens.append(token)
-            segment_ids.append(0)
+            token_type_ids.append(0)
         tokens.append("[SEP]")
-        segment_ids.append(0)
+        token_type_ids.append(0)
 
         if tokens_b:
             for token in tokens_b:
                 tokens.append(token)
-                segment_ids.append(1)
+                token_type_ids.append(1)
             tokens.append("[SEP]")
-            segment_ids.append(1)
+            token_type_ids.append(1)
 
         input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
         # The mask has 1 for real tokens and 0 for padding tokens. Only real
         # tokens are attended to.
-        input_mask = [1] * len(input_ids)
+        attention_mask = [1] * len(input_ids)
 
         # Zero-pad up to the sequence length.
         while len(input_ids) < max_seq_length:
             input_ids.append(0)
-            input_mask.append(0)
-            segment_ids.append(0)
+            attention_mask.append(0)
+            token_type_ids.append(0)
 
         assert len(input_ids) == max_seq_length
-        assert len(input_mask) == max_seq_length
-        assert len(segment_ids) == max_seq_length
+        assert len(attention_mask) == max_seq_length
+        assert len(token_type_ids) == max_seq_length
 
         label_id = label_map[example.label]
 
         input_ids_list.append(input_ids)
-        input_mask_list.append(input_mask)
-        segment_ids_list.append(segment_ids)
+        attention_mask_list.append(attention_mask)
+        token_type_ids_list.append(token_type_ids)
+        label_id_list.append(label_id)
         
 
     heads, rels = parser.parse_bpes(
                 input_ids_list,
-                input_mask_list,
+                attention_mask_list,
                 has_b=examples[0].text_b is not None,
                 has_c=examples[0].text_c is not None,
                 expand_type=expand_type,
@@ -270,6 +310,10 @@ def convert_parsed_examples_to_features(
                 align_type=align_type, 
                 return_tensor=return_tensor, 
                 sep_token_id=tokenizer.sep_token_id)
+
+    dists = None
+    if compute_dist:
+        dists = compute_distance(heads, attention_mask_list)
 
     features = [[]]
     for i, example in enumerate(examples):
@@ -279,17 +323,29 @@ def convert_parsed_examples_to_features(
             logger.info("tokens: %s" % " ".join(
                 [tokenization.printable_text(x) for x in tokens]))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
             logger.info(
-                "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+                "token_type_ids: %s" % " ".join([str(x) for x in token_type_ids]))
             logger.info("label: %s (id = %d)" % (example.label, label_id))
 
-        features[-1].append(
-            InputFeatures(
-                input_ids=input_ids,
-                input_mask=input_mask,
-                segment_ids=segment_ids,
-                label_id=label_id))
+        if compute_dist:
+            features[-1].append(
+                InputParsedFeatures(input_ids=input_ids_list[i],
+                              attention_mask=attention_mask_list[i],
+                              token_type_ids=token_type_ids_list[i],
+                              label_id=label_id_list[i],
+                              heads=heads[i],
+                              rels=rels[i],
+                              dists=dists[i]))
+        else:
+            features[-1].append(
+                InputParsedFeatures(input_ids=input_ids_list[i],
+                              attention_mask=attention_mask_list[i],
+                              token_type_ids=token_type_ids_list[i],
+                              label_id=label_id_list[i],
+                              heads=heads[i],
+                              rels=rels[i]))
+
         if len(features[-1]) == n_class:
             features.append([])
 
@@ -320,37 +376,37 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
         tokens_b = tokens_c + ["[SEP]"] + tokens_b
 
         tokens = []
-        segment_ids = []
+        token_type_ids = []
         tokens.append("[CLS]")
-        segment_ids.append(0)
+        token_type_ids.append(0)
         for token in tokens_a:
             tokens.append(token)
-            segment_ids.append(0)
+            token_type_ids.append(0)
         tokens.append("[SEP]")
-        segment_ids.append(0)
+        token_type_ids.append(0)
 
         if tokens_b:
             for token in tokens_b:
                 tokens.append(token)
-                segment_ids.append(1)
+                token_type_ids.append(1)
             tokens.append("[SEP]")
-            segment_ids.append(1)
+            token_type_ids.append(1)
 
         input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
         # The mask has 1 for real tokens and 0 for padding tokens. Only real
         # tokens are attended to.
-        input_mask = [1] * len(input_ids)
+        attention_mask = [1] * len(input_ids)
 
         # Zero-pad up to the sequence length.
         while len(input_ids) < max_seq_length:
             input_ids.append(0)
-            input_mask.append(0)
-            segment_ids.append(0)
+            attention_mask.append(0)
+            token_type_ids.append(0)
 
         assert len(input_ids) == max_seq_length
-        assert len(input_mask) == max_seq_length
-        assert len(segment_ids) == max_seq_length
+        assert len(attention_mask) == max_seq_length
+        assert len(token_type_ids) == max_seq_length
 
         label_id = label_map[example.label]
         if ex_index < 5:
@@ -359,16 +415,16 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
             logger.info("tokens: %s" % " ".join(
                 [tokenization.printable_text(x) for x in tokens]))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
             logger.info(
-                "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+                "token_type_ids: %s" % " ".join([str(x) for x in token_type_ids]))
             logger.info("label: %s (id = %d)" % (example.label, label_id))
 
         features[-1].append(
             InputFeatures(
                 input_ids=input_ids,
-                input_mask=input_mask,
-                segment_ids=segment_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
                 label_id=label_id))
         if len(features[-1]) == n_class:
             features.append([])
@@ -378,7 +434,7 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
     print('#features', len(features))
     return features
 
-def convert_and_cache_features(args, tokenizer, examples, data_type='train'):
+def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
 
     task = args.task_name
 
@@ -442,7 +498,54 @@ def convert_and_cache_features(args, tokenizer, examples, data_type='train'):
         with open(cached_features_file, 'wb') as w:
             pickle.dump(features, w)
 
-    return features
+    input_ids = []
+    attention_mask = []
+    token_type_ids = []
+    label_id = []
+    for f in features:
+        input_ids.append([])
+        attention_mask.append([])
+        token_type_ids.append([])
+        for i in range(n_class):
+            input_ids[-1].append(f[i].input_ids)
+            attention_mask[-1].append(f[i].attention_mask)
+            token_type_ids[-1].append(f[i].token_type_ids)
+        label_id.append(f[0].label_id)
+
+    all_input_ids = torch.tensor(input_ids, dtype=torch.long)
+    all_attention_mask = torch.tensor(attention_mask, dtype=torch.long)
+    all_token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
+    all_label_ids = torch.tensor(label_id, dtype=torch.long)
+
+    if args.parser_model is None:
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids)
+    else:
+        heads = []
+        rels = []
+        dists = []
+        for f in features:
+            heads.append([])
+            rels.append([])
+            if args.parser_compute_dist:
+                dists.append([])
+            for i in range(n_class):
+                heads[-1].append(f[i].heads)
+                rels[-1].append(f[i].rels)
+        all_heads = torch.stack([torch.stack(tup) for tup in heads])
+        all_rels = torch.stack([torch.stack(tup) for tup in rels])
+        if args.parser_compute_dist:
+            all_dists = torch.stack([torch.stack(tup) for tup in dists])
+
+        if args.parser_compute_dist:
+            all_dists = torch.stack([f.dists for f in features])
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids,
+                                    all_heads, all_rels, all_dists)
+        else:
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids, 
+                                    all_heads, all_rels)
+
+    return dataset
+
 
 def collate_fn(batch):
     """
@@ -593,6 +696,8 @@ def main():
     #parser.add_argument("--init_checkpoint", default='check_points/pretrain_models/albert_xxlarge_google_zh_v1121/pytorch_model.pth',
     #                    type=str,
     #                    help="Initial checkpoint (usually from a pre-trained BERT model).")
+    parser.add_argument('--logging_steps', type=int, default=10, help="Log every X updates steps.")
+    parser.add_argument('--save_steps', type=int, default=1000, help="Save checkpoint every X updates steps.")
     parser.add_argument("--do_lower_case", default=True, action='store_true',
                         help="Whether to lower case the input text. True for uncased models, False for cased models.")
     parser.add_argument("--max_seq_length", default=512, type=int,
@@ -690,7 +795,7 @@ def main():
             parser_label_embed_size *= 2
         config.num_rel_labels = parser_label_embed_size
         
-        model = StructuredBertV2ForSequenceClassification.from_pretrained(
+        model = StructuredBertV2ForMultipleChoice.from_pretrained(
                         args.model_name_or_path, config=config)
     else:
         config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
@@ -738,11 +843,12 @@ def main():
                                  weight_decay_rate=args.weight_decay_rate,
                                  opt_pooler=True)  # multi_choice must update pooler
 
+
     global_step = 0
     eval_dataloader = None
     if args.do_eval:
         eval_examples = processor.get_dev_examples()
-        eval_features = convert_and_cache_features(args, tokenizer, eval_examples, data_type='eval')
+        eval_data = load_and_cache_examples(args, tokenizer, eval_examples, data_type='eval')
         """
         feature_dir = os.path.join(args.data_dir, 'dev_features{}.pkl'.format(args.max_seq_length))
         if os.path.exists(feature_dir):
@@ -751,29 +857,29 @@ def main():
             eval_features = convert_examples_to_features(eval_examples, label_list, args.max_seq_length, tokenizer)
             with open(feature_dir, 'wb') as w:
                 pickle.dump(eval_features, w)
-        """
 
         input_ids = []
-        input_mask = []
-        segment_ids = []
+        attention_mask = []
+        token_type_ids = []
         label_id = []
 
         for f in eval_features:
             input_ids.append([])
-            input_mask.append([])
-            segment_ids.append([])
+            attention_mask.append([])
+            token_type_ids.append([])
             for i in range(n_class):
                 input_ids[-1].append(f[i].input_ids)
-                input_mask[-1].append(f[i].input_mask)
-                segment_ids[-1].append(f[i].segment_ids)
+                attention_mask[-1].append(f[i].attention_mask)
+                token_type_ids[-1].append(f[i].token_type_ids)
             label_id.append(f[0].label_id)
 
         all_input_ids = torch.tensor(input_ids, dtype=torch.long)
-        all_input_mask = torch.tensor(input_mask, dtype=torch.long)
-        all_segment_ids = torch.tensor(segment_ids, dtype=torch.long)
+        all_attention_mask = torch.tensor(attention_mask, dtype=torch.long)
+        all_token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
         all_label_ids = torch.tensor(label_id, dtype=torch.long)
 
-        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        eval_data = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids)
+        """
         if args.local_rank == -1:
             eval_sampler = SequentialSampler(eval_data)
         else:
@@ -782,9 +888,7 @@ def main():
                                     collate_fn=collate_fn)
 
     if args.do_train:
-        best_accuracy = 0
-
-        train_features = convert_and_cache_features(args, tokenizer, train_examples, data_type='train')
+        train_data = load_and_cache_examples(args, tokenizer, train_examples, data_type='train')
         """
         feature_dir = os.path.join(args.data_dir, 'train_features{}.pkl'.format(args.max_seq_length))
         if os.path.exists(feature_dir):
@@ -800,26 +904,6 @@ def main():
         logger.info("  Batch size = %d", args.train_batch_size)
         logger.info("  Num steps = %d", num_train_steps)
 
-        input_ids = []
-        input_mask = []
-        segment_ids = []
-        label_id = []
-        for f in train_features:
-            input_ids.append([])
-            input_mask.append([])
-            segment_ids.append([])
-            for i in range(n_class):
-                input_ids[-1].append(f[i].input_ids)
-                input_mask[-1].append(f[i].input_mask)
-                segment_ids[-1].append(f[i].segment_ids)
-            label_id.append(f[0].label_id)
-
-        all_input_ids = torch.tensor(input_ids, dtype=torch.long)
-        all_input_mask = torch.tensor(input_mask, dtype=torch.long)
-        all_segment_ids = torch.tensor(segment_ids, dtype=torch.long)
-        all_label_ids = torch.tensor(label_id, dtype=torch.long)
-
-        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
         if args.local_rank == -1:
             train_sampler = RandomSampler(train_data)
         else:
@@ -828,6 +912,8 @@ def main():
                                       drop_last=True, collate_fn=collate_fn)
         steps_per_epoch = int(num_train_steps / args.num_train_epochs)
 
+        log_history = []
+        trainer_state = {'best_metric':0, 'best_checkpoint':None, 'epoch': int(args.num_train_epochs)}
         for ie in range(int(args.num_train_epochs)):
             model.train()
             tr_loss = 0
@@ -836,10 +922,10 @@ def main():
                 for step, batch in enumerate(train_dataloader):
                     inputs = _prepare_inputs(batch, device)
                     #batch = tuple(t.to(device) for t in batch)
-                    #input_ids, input_mask, segment_ids, label_ids = batch
+                    #input_ids, attention_mask, token_type_ids, label_ids = batch
                     #print ("input_ids:\n", input_ids)
-                    #print ("segment_ids:\n", segment_ids)
-                    #print ("input_mask:\n", input_mask)
+                    #print ("token_type_ids:\n", token_type_ids)
+                    #print ("attention_mask:\n", attention_mask)
                     #print ("label_ids:\n", label_ids)
 
                     outputs = model(**inputs)
@@ -870,67 +956,100 @@ def main():
                         pbar.set_postfix({'loss': '{0:1.5f}'.format(tr_loss / (nb_tr_steps + 1e-5))})
                         pbar.update(1)
 
-            if args.do_eval:
-                model.eval()
-                eval_loss, eval_accuracy = 0, 0
-                nb_eval_steps, nb_eval_examples = 0, 0
-                logits_all = []
-                #for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader):
-                for step, batch in enumerate(eval_dataloader):
-                    inputs = _prepare_inputs(batch, device)
-                    """
-                    input_ids = input_ids.to(device)
-                    input_mask = input_mask.to(device)
-                    segment_ids = segment_ids.to(device)
-                    label_ids = label_ids.to(device)
-                    """
+                        if args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                            result = {'global_step': global_step,
+                                      'loss': tr_loss / nb_tr_steps}
+                            log_history.append(result)
 
-                    with torch.no_grad():
-                        outputs = model(**inputs)
-                        tmp_eval_loss, logits = outputs[:2]
+                        if args.do_eval and args.save_steps > 0 and global_step % args.save_steps == 0:
+                            model.eval()
+                            eval_loss, eval_accuracy = 0, 0
+                            nb_eval_steps, nb_eval_examples = 0, 0
+                            logits_all = []
+                            #for input_ids, attention_mask, token_type_ids, label_ids in tqdm(eval_dataloader):
+                            for step, batch in enumerate(eval_dataloader):
+                                inputs = _prepare_inputs(batch, device)
+                                """
+                                input_ids = input_ids.to(device)
+                                attention_mask = attention_mask.to(device)
+                                token_type_ids = token_type_ids.to(device)
+                                label_ids = label_ids.to(device)
+                                """
 
-                    logits = logits.detach().cpu().numpy()
-                    #label_ids = label_ids.cpu().numpy()
-                    label_ids = inputs['labels'].detach().cpu().numpy()
-                    for i in range(len(logits)):
-                        logits_all += [logits[i]]
+                                with torch.no_grad():
+                                    outputs = model(**inputs)
+                                    tmp_eval_loss, logits = outputs[:2]
 
-                    tmp_eval_accuracy = accuracy(logits, label_ids.reshape(-1))
+                                logits = logits.detach().cpu().numpy()
+                                #label_ids = label_ids.cpu().numpy()
+                                label_ids = inputs['labels'].detach().cpu().numpy()
+                                for i in range(len(logits)):
+                                    logits_all += [logits[i]]
 
-                    eval_loss += tmp_eval_loss.mean().item()
-                    eval_accuracy += tmp_eval_accuracy
+                                tmp_eval_accuracy = accuracy(logits, label_ids.reshape(-1))
 
-                    nb_eval_examples += inputs["input_ids"].size(0)
-                    nb_eval_steps += 1
+                                eval_loss += tmp_eval_loss.mean().item()
+                                eval_accuracy += tmp_eval_accuracy
 
-                eval_loss = eval_loss / nb_eval_steps
-                eval_accuracy = eval_accuracy / nb_eval_examples
+                                nb_eval_examples += inputs["input_ids"].size(0)
+                                nb_eval_steps += 1
 
-                if args.do_train:
-                    result = {'eval_loss': eval_loss,
-                              'eval_accuracy': eval_accuracy,
-                              'global_step': global_step,
-                              'loss': tr_loss / nb_tr_steps}
-                else:
-                    result = {'eval_loss': eval_loss,
-                              'eval_accuracy': eval_accuracy}
+                            eval_loss = eval_loss / nb_eval_steps
+                            eval_accuracy = eval_accuracy / nb_eval_examples
 
-                logger.info("***** Eval results *****")
-                for key in sorted(result.keys()):
-                    logger.info("  %s = %s", key, str(result[key]))
+                            result = {'global_step': global_step,
+                                      'eval_loss': eval_loss,
+                                      'eval_accuracy': eval_accuracy}
+                            log_history.append(result)
 
-                with open(args.log_file, 'a') as aw:
-                    aw.write("-------------------global steps:{}-------------------\n".format(global_step))
-                    aw.write(str(json.dumps(result, indent=2)) + '\n')
+                            logger.info("***** Eval results (global step=%d) *****" % global_step)
+                            for key in sorted(result.keys()):
+                                logger.info("  %s = %s", key, str(result[key]))
 
-                if eval_accuracy >= best_accuracy:
-                    torch.save(model.state_dict(), os.path.join(args.output_dir, "model_best.pt"))
-                    best_accuracy = eval_accuracy
+                            with open(args.log_file, 'a') as aw:
+                                aw.write("-------------------global steps:{}-------------------\n".format(global_step))
+                                aw.write(str(json.dumps(result, indent=2)) + '\n')
 
-        model.load_state_dict(torch.load(os.path.join(args.output_dir, "model_best.pt")))
-        torch.save(model.state_dict(), os.path.join(args.output_dir, "model.pt"))
+                            if eval_accuracy > trainer_state['best_metric']:
+                                # Save model checkpoint
+                                output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+                                trainer_state['best_checkpoint'] = output_dir
+                                trainer_state['best_metric'] = eval_accuracy
 
-    model.load_state_dict(torch.load(os.path.join(args.output_dir, "model.pt")))
+                                if not os.path.exists(output_dir):
+                                    os.makedirs(output_dir)
+                                model_to_save = model.module if hasattr(model,
+                                                                        'module') else model  # Take care of distributed/parallel training
+                                model_to_save.save_pretrained(output_dir)
+                                torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                                logger.info("Saving model checkpoint to %s", output_dir)
+                                tokenizer.save_pretrained(output_dir)
+                                #torch.save(model.state_dict(), os.path.join(args.output_dir, "model_best.pt"))
+                                delete_old_checkpoints(args.output_dir, trainer_state['best_checkpoint'])
+
+        trainer_state['global_step'] = global_step
+        trainer_state['log_history'] = log_history
+        state_path = os.path.join(args.output_dir, 'trainer_state.json')
+        with open(state_path, 'w') as f:
+            json.dump(trainer_state, f,indent=4)
+
+        logger.info("Loading best model from: %s", trainer_state['best_checkpoint'])
+        model = model.from_pretrained(trainer_state['best_checkpoint'])
+        logger.info("Saving model checkpoint to %s", args.output_dir)
+        # Save a trained model, configuration and tokenizer using `save_pretrained()`.
+        # They can then be reloaded using `from_pretrained()`
+        model_to_save = model.module if hasattr(model,
+                                                'module') else model  # Take care of distributed/parallel training
+        model_to_save.save_pretrained(args.output_dir)
+        tokenizer.save_pretrained(args.output_dir)
+
+        torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
+
+        #model.load_state_dict(torch.load(os.path.join(args.output_dir, "model_best.pt")))
+        #torch.save(model.state_dict(), os.path.join(args.output_dir, "model.pt"))
+
+    model = model.from_pretrained(args.output_dir)
+    #model.load_state_dict(torch.load(os.path.join(args.output_dir, "model.pt")))
 
     if args.do_eval:
         logger.info("***** Running evaluation *****")
@@ -941,17 +1060,22 @@ def main():
         eval_loss, eval_accuracy = 0, 0
         nb_eval_steps, nb_eval_examples = 0, 0
         logits_all = []
-        for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader):
-            input_ids = input_ids.to(device)
-            input_mask = input_mask.to(device)
-            segment_ids = segment_ids.to(device)
-            label_ids = label_ids.to(device)
 
+        #for input_ids, attention_mask, token_type_ids, label_ids in tqdm(eval_dataloader):
+            #input_ids = input_ids.to(device)
+            #attention_mask = attention_mask.to(device)
+            #token_type_ids = token_type_ids.to(device)
+            #label_ids = label_ids.to(device)
+
+        for step, batch in enumerate(eval_dataloader):
+            inputs = _prepare_inputs(batch, device)
+ 
             with torch.no_grad():
-                tmp_eval_loss, logits = model(input_ids, segment_ids, input_mask, label_ids, return_logits=True)
+                outputs = model(**inputs)
+                tmp_eval_loss, logits = outputs[:2]
 
             logits = logits.detach().cpu().numpy()
-            label_ids = label_ids.cpu().numpy()
+            label_ids = inputs['labels'].cpu().numpy()
             for i in range(len(logits)):
                 logits_all += [logits[i]]
 
@@ -960,7 +1084,7 @@ def main():
             eval_loss += tmp_eval_loss.mean().item()
             eval_accuracy += tmp_eval_accuracy
 
-            nb_eval_examples += input_ids.size(0)
+            nb_eval_examples += inputs['input_ids'].size(0)
             nb_eval_steps += 1
 
         eval_loss = eval_loss / nb_eval_steps
@@ -986,7 +1110,7 @@ def main():
                         f.write(" ")
 
         test_examples = processor.get_test_examples()
-        test_features = convert_and_cache_features(args, tokenizer, test_examples, data_type='test')
+        test_data = load_and_cache_examples(args, tokenizer, test_examples, data_type='test')
         """
         feature_dir = os.path.join(args.data_dir, 'test_features{}.pkl'.format(args.max_seq_length))
         if os.path.exists(feature_dir):
@@ -1001,48 +1125,56 @@ def main():
         logger.info("  Num examples = %d", len(test_examples))
         logger.info("  Batch size = %d", args.eval_batch_size)
 
+        """
         input_ids = []
-        input_mask = []
-        segment_ids = []
+        attention_mask = []
+        token_type_ids = []
         label_id = []
 
         for f in test_features:
             input_ids.append([])
-            input_mask.append([])
-            segment_ids.append([])
+            attention_mask.append([])
+            token_type_ids.append([])
             for i in range(n_class):
                 input_ids[-1].append(f[i].input_ids)
-                input_mask[-1].append(f[i].input_mask)
-                segment_ids[-1].append(f[i].segment_ids)
+                attention_mask[-1].append(f[i].attention_mask)
+                token_type_ids[-1].append(f[i].token_type_ids)
             label_id.append(f[0].label_id)
 
         all_input_ids = torch.tensor(input_ids, dtype=torch.long)
-        all_input_mask = torch.tensor(input_mask, dtype=torch.long)
-        all_segment_ids = torch.tensor(segment_ids, dtype=torch.long)
+        all_attention_mask = torch.tensor(attention_mask, dtype=torch.long)
+        all_token_type_ids = torch.tensor(token_type_ids, dtype=torch.long)
         all_label_ids = torch.tensor(label_id, dtype=torch.long)
 
-        test_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        test_data = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids)
+        """
         if args.local_rank == -1:
             test_sampler = SequentialSampler(test_data)
         else:
             test_sampler = DistributedSampler(test_data)
-        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=args.eval_batch_size)
+        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=args.eval_batch_size, 
+                                    collate_fn=collate_fn)
 
         model.eval()
         test_loss, test_accuracy = 0, 0
         nb_test_steps, nb_test_examples = 0, 0
         logits_all = []
-        for input_ids, input_mask, segment_ids, label_ids in tqdm(test_dataloader):
-            input_ids = input_ids.to(device)
-            input_mask = input_mask.to(device)
-            segment_ids = segment_ids.to(device)
-            label_ids = label_ids.to(device)
 
+        #for input_ids, attention_mask, token_type_ids, label_ids in tqdm(test_dataloader):
+        #    input_ids = input_ids.to(device)
+        #    attention_mask = attention_mask.to(device)
+        #    token_type_ids = token_type_ids.to(device)
+        #    label_ids = label_ids.to(device)
+
+        for step, batch in enumerate(test_dataloader):
+            inputs = _prepare_inputs(batch, device)
+ 
             with torch.no_grad():
-                tmp_test_loss, logits = model(input_ids, segment_ids, input_mask, label_ids, return_logits=True)
+                outputs = model(**inputs)
+                tmp_test_loss, logits = outputs[:2]
 
             logits = logits.detach().cpu().numpy()
-            label_ids = label_ids.to('cpu').numpy()
+            label_ids = inputs['labels'].to('cpu').numpy()
             for i in range(len(logits)):
                 logits_all += [logits[i]]
 
@@ -1051,7 +1183,7 @@ def main():
             test_loss += tmp_test_loss.mean().item()
             test_accuracy += tmp_test_accuracy
 
-            nb_test_examples += input_ids.size(0)
+            nb_test_examples += inputs['input_ids'].size(0)
             nb_test_steps += 1
 
         test_loss = test_loss / nb_test_steps
