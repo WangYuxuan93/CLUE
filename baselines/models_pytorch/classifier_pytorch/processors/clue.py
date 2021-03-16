@@ -502,6 +502,41 @@ class CmnliProcessor(DataProcessor):
         return examples
 
 
+class OcnliProcessor(DataProcessor):
+    """Processor for the OCNLI data set."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "train.50k.json")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "dev.json")), "dev")
+
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "test.json")), "test")
+
+    def get_labels(self):
+        """See base class."""
+        return ["contradiction", "entailment", "neutral"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            guid = "%s-%s" % (set_type, i)
+            text_a = line["sentence1"]
+            text_b = line["sentence2"]
+            label = str(line["label"]) if set_type != 'test' else 'neutral'
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+        return examples
+
+
 class CslProcessor(DataProcessor):
     """Processor for the CSL data set (CLUE version)."""
 
@@ -662,6 +697,7 @@ class CopaProcessor(DataProcessor):
 clue_tasks_num_labels = {
     'iflytek': 119,
     'cmnli': 3,
+    'ocnli': 3,
     'afqmc': 2,
     'csl': 2,
     'wsc': 2,
@@ -673,6 +709,7 @@ clue_processors = {
     'tnews': TnewsProcessor,
     'iflytek': IflytekProcessor,
     'cmnli': CmnliProcessor,
+    'ocnli': OcnliProcessor,
     'afqmc': AfqmcProcessor,
     'csl': CslProcessor,
     'wsc': WscProcessor,
@@ -683,6 +720,7 @@ clue_output_modes = {
     'tnews': "classification",
     'iflytek': "classification",
     'cmnli': "classification",
+    'ocnli': "classification",
     'afqmc': "classification",
     'csl': "classification",
     'wsc': "classification",

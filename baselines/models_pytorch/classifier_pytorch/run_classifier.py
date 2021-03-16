@@ -220,7 +220,7 @@ def train(args, train_dataset, model, tokenizer):
                     log_history.append({'step': global_step, 'loss': loss.item()})
                     # Log metrics
                     if args.local_rank == -1:  # Only evaluate when single GPU otherwise metrics may not average well
-                        logger.info("Epoch = {}, Global step = {}".format(epoch+float(step)/steps_every_epoch, global_step))
+                        logger.info("Epoch = {}, Global step = {}".format(epoch, global_step))
                         result = evaluate(args, model, tokenizer)
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
