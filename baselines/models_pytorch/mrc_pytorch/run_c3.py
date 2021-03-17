@@ -665,7 +665,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
-    parser.add_argument("--gpu_ids", default='0', type=str, required=True)
+    parser.add_argument("--model_type", default="bert", type=str, help="Model type")
+    parser.add_argument("--gpu_ids", default='0', type=str)
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
     parser.add_argument("--task_name", default='c3', type=str, required=True)
@@ -698,6 +699,8 @@ def main():
     #                    help="Initial checkpoint (usually from a pre-trained BERT model).")
     parser.add_argument('--logging_steps', type=int, default=10, help="Log every X updates steps.")
     parser.add_argument('--save_steps', type=int, default=1000, help="Save checkpoint every X updates steps.")
+    parser.add_argument('--overwrite_output_dir', action='store_true',
+                        help="Overwrite the content of the output directory")
     parser.add_argument("--do_lower_case", default=True, action='store_true',
                         help="Whether to lower case the input text. True for uncased models, False for cased models.")
     parser.add_argument("--max_seq_length", default=512, type=int,
@@ -706,13 +709,15 @@ def main():
                              "than this will be padded.")
     parser.add_argument("--do_train", default=False, action='store_true', help="Whether to run training.")
     parser.add_argument("--do_eval", default=False, action='store_true', help="Whether to run eval on the dev set.")
-    parser.add_argument("--train_batch_size", default=16, type=int, help="Total batch size for training.")
-    parser.add_argument("--eval_batch_size", default=16, type=int, help="Total batch size for eval.")
+    parser.add_argument("--per_gpu_train_batch_size", default=16, type=int, help="Total batch size for training.")
+    parser.add_argument("--per_gpu_eval_batch_size", default=16, type=int, help="Total batch size for eval.")
     parser.add_argument("--learning_rate", default=2e-5, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--schedule", default='warmup_linear', type=str, help='schedule')
     parser.add_argument("--weight_decay_rate", default=0.01, type=float, help='weight_decay_rate')
     parser.add_argument('--clip_norm', type=float, default=1.0)
     parser.add_argument("--num_train_epochs", default=8.0, type=float, help="Total number of training epochs to perform.")
+    parser.add_argument("--max_steps", default=-1, type=int,
+                        help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
     parser.add_argument("--warmup_proportion", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for. "
                              "E.g., 0.1 = 10%% of training.")
@@ -738,7 +743,7 @@ def main():
             print('%s: %s' % (str(k), str(v)))
         opt_file.write('-------------- End ----------------\n')
         print('------------ End -------------')
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+    #os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
 
     if os.path.exists(args.log_file):
         os.remove(args.log_file)
@@ -757,6 +762,8 @@ def main():
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
             args.gradient_accumulation_steps))
 
+    args.train_batch_size = args.per_gpu_train_batch_size
+    args.eval_batch_size = args.per_gpu_eval_batch_size
     args.train_batch_size = int(args.train_batch_size / args.gradient_accumulation_steps)
 
     random.seed(args.seed)
