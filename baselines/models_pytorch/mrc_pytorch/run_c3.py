@@ -1057,6 +1057,7 @@ def main():
         #torch.save(model.state_dict(), os.path.join(args.output_dir, "model.pt"))
 
     model = model.from_pretrained(args.output_dir)
+    model = model.to(device)
     #model.load_state_dict(torch.load(os.path.join(args.output_dir, "model.pt")))
 
     if args.do_eval:
