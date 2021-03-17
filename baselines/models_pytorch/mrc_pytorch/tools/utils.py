@@ -3,8 +3,8 @@ import os
 import re
 from glob import glob
 
-import tensorflow as tf
-import tensorflow.contrib.slim as slim
+#import tensorflow as tf
+#import tensorflow.contrib.slim as slim
 import torch
 
 
