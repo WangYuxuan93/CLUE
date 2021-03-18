@@ -187,15 +187,15 @@ def _truncate_seq_tuple(tokens_a, tokens_b, tokens_c, max_length):
 
 
 def convert_parsed_examples_to_features(
-    examples,
-    label_list, 
-    max_seq_length, 
-    tokenizer,
-    parser,
-    expand_type="word",
-    align_type="nltk",
-    return_tensor=True,
-    compute_dist=False
+        examples,
+        label_list, 
+        max_seq_length, 
+        tokenizer,
+        parser,
+        expand_type="word",
+        align_type="nltk",
+        return_tensor=True,
+        compute_dist=False
     ):
     
     print("#examples", len(examples))
@@ -293,17 +293,17 @@ def convert_parsed_examples_to_features(
                               attention_mask=attention_mask_list[i],
                               token_type_ids=token_type_ids_list[i],
                               label_id=label_id_list[i],
-                              heads=heads[i],
-                              rels=rels[i],
-                              dists=dists[i]))
+                              heads=heads[i].to_sparse(),
+                              rels=rels[i].to_sparse(),
+                              dists=dists[i].to_sparse()))
         else:
             features[-1].append(
                 InputParsedFeatures(input_ids=input_ids_list[i],
                               attention_mask=attention_mask_list[i],
                               token_type_ids=token_type_ids_list[i],
                               label_id=label_id_list[i],
-                              heads=heads[i],
-                              rels=rels[i]))
+                              heads=heads[i].to_sparse(),
+                              rels=rels[i].to_sparse()))
 
         if len(features[-1]) == n_class:
             features.append([])

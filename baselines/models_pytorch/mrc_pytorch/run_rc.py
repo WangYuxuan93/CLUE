@@ -27,7 +27,8 @@ from metrics.mrc_compute_metrics import compute_metrics
 from processors import mrc_output_modes as output_modes
 from processors import mrc_processors as processors
 from processors import c3_collate_fn as collate_fn
-from processors import load_and_cache_c3_examples as load_and_cache_examples
+from processors import example_loaders
+#from processors import load_and_cache_c3_examples as load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
 from tools.progressbar import ProgressBar
@@ -49,11 +50,12 @@ from pathlib import Path
 #}
 
 MODEL_CLASSES = {
-    ## bert ernie bert_wwm bert_wwwm_ext
+    'chid': (BertConfig, BertForMultipleChoice, BertTokenizer),
     'c3': (BertConfig, BertForMultipleChoice, BertTokenizer),
 }
 
 SBERT_MODEL = {
+    'chid': StructuredBertV2ForMultipleChoice,
     'c3': StructuredBertV2ForMultipleChoice,
 }
 
@@ -281,7 +283,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     eval_outputs_dirs = (args.output_dir,)
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
-        eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, data_type='dev')
+        eval_dataset = example_loaders[args.task_name](args, eval_task, tokenizer, data_type='dev')
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
 
@@ -347,7 +349,7 @@ def predict(args, model, tokenizer, label_list, prefix=""):
     label_map = {i: label for i, label in enumerate(label_list)}
 
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
-        pred_dataset = load_and_cache_examples(args, pred_task, tokenizer, data_type='test')
+        pred_dataset = example_loaders[args.task_name](args, pred_task, tokenizer, data_type='test')
         if not os.path.exists(pred_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(pred_output_dir)
 
@@ -564,12 +566,12 @@ def main():
     seed_everything(args.seed)
     # Prepare CLUE task
     args.task_name = args.task_name.lower()
-    if args.task_name not in processors:
-        raise ValueError("Task not found: %s" % (args.task_name))
-    processor = processors[args.task_name](args.data_dir)
+    #if args.task_name not in processors:
+    #    raise ValueError("Task not found: %s" % (args.task_name))
+    #processor = processors[args.task_name](args.data_dir)
     args.output_mode = output_modes[args.task_name]
-    label_list = processor.get_labels()
-    num_labels = len(label_list)
+    #label_list = processor.get_labels()
+    #num_labels = len(label_list)
 
     # Load pretrained model and tokenizer
     if args.local_rank not in [-1, 0]:
@@ -578,7 +580,7 @@ def main():
     if args.parser_model is not None:
         config = StructuredBertV2Config.from_pretrained(
                         args.config_name if args.config_name else args.model_name_or_path)
-        config.num_labels=num_labels
+        #config.num_labels=num_labels
 
         tokenizer = BertTokenizer.from_pretrained(
                         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path)
@@ -597,7 +599,7 @@ def main():
         args.model_type = args.model_type.lower()
         config_class, model_class, tokenizer_class = MODEL_CLASSES[args.task_name]
         config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
-                                              num_labels=num_labels, finetuning_task=args.task_name)
+                                              finetuning_task=args.task_name)
         tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                     do_lower_case=args.do_lower_case)
         model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path),
@@ -609,7 +611,7 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
-        train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, data_type='train')
+        train_dataset = example_loaders[args.task_name](args, args.task_name, tokenizer, data_type='train')
         global_step, tr_loss, best_checkpoint = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
         if best_checkpoint is not None:

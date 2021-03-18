@@ -4,7 +4,7 @@
 # @Last Modified by:   bo.shi
 # @Last Modified time: 2020-01-01 11:46:07
 
-TASK_NAME="tnews"
+TASK_NAME="ocnli"
 MODEL_NAME="bert-base-chinese"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
@@ -29,7 +29,6 @@ if [ $# == 0 ]; then
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
       --config_name=data/sbertv2.json \
-      --parser_model=$PARSER_MODEL \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
       --parser_compute_dist \
       --parser_return_tensor \

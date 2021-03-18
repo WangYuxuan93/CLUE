@@ -25,6 +25,7 @@ cd $CURRENT_DIR
 echo "Start running..."
 if [ $# == 0 ]; then
     python run_rc.py \
+      --optim=BERTAdam \
       --model_type=bert \
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
