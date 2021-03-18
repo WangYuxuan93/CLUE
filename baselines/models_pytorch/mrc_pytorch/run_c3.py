@@ -166,7 +166,7 @@ class c3Processor(DataProcessor):
 
     def _create_examples(self, data, set_type):
         """Creates examples for the training and dev sets."""
-        cache_dir = os.path.join(self.data_dir, set_type + '_examples.pkl')
+        cache_dir = os.path.join(self.data_dir, set_type + '_examples_c3-old.pkl')
         if os.path.exists(cache_dir):
             examples = pickle.load(open(cache_dir, 'rb'))
         else:
@@ -442,7 +442,7 @@ def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
     label_list = processor.get_labels()
 
     if args.parser_model is None:
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}.pkl'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}-old.pkl'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
@@ -453,7 +453,7 @@ def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
             parser_info += "-3d"
         if args.parser_compute_dist:
             parser_info += "-dist"
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}.pkl'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}-old.pkl'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
