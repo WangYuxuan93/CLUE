@@ -1,17 +1,15 @@
-'''
-@author: zhangxinrui
-@name: dataset_roberta.py
-@date: 10/07/2019
-
-'''
 import collections
 import os
 import pickle
 import logging
+import torch
 
 import numpy as np
 import json
 from tqdm import tqdm
+from torch.utils.data import TensorDataset
+from neuronlp2.parser import Parser
+from neuronlp2.sdp_parser import SDPParser
 
 try:
     import regex as re
@@ -27,6 +25,31 @@ RawResult = collections.namedtuple("RawResult",
                                    ["unique_id", "example_id", "tag", "logit"])
 
 SPIECE_UNDERLINE = '▁'
+
+def chid_collate_fn(batch):
+    """
+    batch should be a list of (sequence, target, length) tuples...
+    Returns a padded tensor of sequences sorted from longest to shortest,
+    """
+    num_items = len(batch[0])
+    all_heads, all_rels, all_dists = None, None, None
+
+    if num_items == 5:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels = map(torch.stack, zip(*batch))
+    elif num_items == 7:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 8:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
+    
+    batch = {}
+    batch["input_ids"] = all_input_ids
+    batch["attention_mask"] = all_attention_mask
+    batch["token_type_ids"] = all_token_type_ids
+    batch["labels"] = all_labels
+    batch["heads"] = all_heads
+    batch["rels"] = all_rels
+    batch["dists"] = all_dists
+    return batch
 
 
 class ChidExample(object):
@@ -337,6 +360,7 @@ def convert_examples_to_features(
             print("tag_index: {}".format(pos))
             print("tokens: {}".format("".join(tokens)))
             print("choice_masks: {}".format(choice_masks))
+            print("input_ids:\n", input_ids)
         while len(input_ids) < max_num_choices:
             input_ids.append([0] * max_seq_length)
             attention_mask.append([0] * max_seq_length)

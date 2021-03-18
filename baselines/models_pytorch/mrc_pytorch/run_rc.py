@@ -26,7 +26,7 @@ from tools.pytorch_optimization import BERTAdam
 from metrics.mrc_compute_metrics import compute_metrics
 from processors import mrc_output_modes as output_modes
 from processors import mrc_processors as processors
-from processors import c3_collate_fn as collate_fn
+from processors import collate_fns
 from processors import example_loaders
 #from processors import load_and_cache_c3_examples as load_and_cache_examples
 from tools.common import seed_everything, save_numpy
@@ -127,7 +127,7 @@ def train(args, train_dataset, model, tokenizer):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size,
-                                  collate_fn=collate_fn)
+                                  collate_fn=collate_fns[args.task_name])
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -291,7 +291,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         # Note that DistributedSampler samples randomly
         eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
-                                     collate_fn=collate_fn)
+                                     collate_fn=collate_fns[args.task_name])
 
         # Eval!
         logger.info("********* Running evaluation {} ********".format(prefix))
@@ -357,7 +357,7 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         # Note that DistributedSampler samples randomly
         pred_sampler = SequentialSampler(pred_dataset) if args.local_rank == -1 else DistributedSampler(pred_dataset)
         pred_dataloader = DataLoader(pred_dataset, sampler=pred_sampler, batch_size=args.pred_batch_size,
-                                     collate_fn=collate_fn)
+                                     collate_fn=collate_fns[args.task_name])
 
         logger.info("******** Running prediction {} ********".format(prefix))
         logger.info("  Num examples = %d", len(pred_dataset))
@@ -469,6 +469,8 @@ def main():
     parser.add_argument("--max_seq_length", default=128, type=int,
                         help="The maximum total input sequence length after tokenization. Sequences longer "
                              "than this will be truncated, sequences shorter will be padded.")
+    parser.add_argument("--max_num_choices", default=10, type=int,
+                        help="The maximum number of cadicate answer,  shorter than this will be padded.")
     parser.add_argument("--do_train", action='store_true',
                         help="Whether to run training.")
     parser.add_argument("--do_eval", action='store_true',
