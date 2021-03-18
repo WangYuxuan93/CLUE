@@ -91,6 +91,8 @@ if __name__ == '__main__':
     parser.add_argument("--schedule", default='warmup_linear', type=str, help='schedule')
     parser.add_argument("--weight_decay_rate", default=0.01, type=float, help='weight_decay_rate')
     parser.add_argument('--seed', type=list, default=[123])
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+                        help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument('--float16', action='store_true', default=False)  # only sm >= 7.0 (tensorcores)
     parser.add_argument('--max_ans_length', type=int, default=50)
     parser.add_argument('--n_best', type=int, default=20)
@@ -163,6 +165,8 @@ if __name__ == '__main__':
     if os.path.exists(args.log_file):
         os.remove(args.log_file)
 
+    args.n_batch = int(args.n_batch / args.gradient_accumulation_steps)
+
     steps_per_epoch = len(train_features) // args.n_batch
     eval_steps = int(steps_per_epoch * args.eval_epochs)
     dev_steps_per_epoch = len(dev_features) // args.n_batch
@@ -170,7 +174,7 @@ if __name__ == '__main__':
         steps_per_epoch += 1
     if len(dev_features) % args.n_batch != 0:
         dev_steps_per_epoch += 1
-    total_steps = steps_per_epoch * args.train_epochs
+    total_steps = int(len(train_features) / args.n_batch / args.gradient_accumulation_steps * args.train_epochs)
 
     print('steps per epoch:', steps_per_epoch)
     print('total steps:', total_steps)
@@ -252,6 +256,8 @@ if __name__ == '__main__':
                     loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions)
                     if n_gpu > 1:
                         loss = loss.mean()  # mean() to average on multi-gpu.
+                    if args.gradient_accumulation_steps > 1:
+                        loss = loss / args.gradient_accumulation_steps
                     total_loss += loss.item()
                     pbar.set_postfix({'loss': '{0:1.5f}'.format(total_loss / (iteration + 1e-5))})
                     pbar.update(1)
@@ -266,14 +272,15 @@ if __name__ == '__main__':
                     else:
                         loss.backward()
 
-                    optimizer.step()
-                    model.zero_grad()
-                    global_steps += 1
-                    iteration += 1
+                    if (step + 1) % args.gradient_accumulation_steps == 0:
+                        optimizer.step()
+                        model.zero_grad()
+                        global_steps += 1
+                        iteration += 1
 
-                    if global_steps % eval_steps == 0:
-                        best_f1, best_em, best_f1_em = evaluate(model, args, dev_examples, dev_features, device,
-                                                                global_steps, best_f1, best_em, best_f1_em)
+                        if global_steps % eval_steps == 0:
+                            best_f1, best_em, best_f1_em = evaluate(model, args, dev_examples, dev_features, device,
+                                                                    global_steps, best_f1, best_em, best_f1_em)
 
         F1s.append(best_f1)
         EMs.append(best_em)
