@@ -187,8 +187,8 @@ class c3Processor(DataProcessor):
                     text_c = tokenization.convert_to_unicode(data[i][1])
                     examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, text_c=text_c))
 
-            with open(cache_dir, 'wb') as w:
-                pickle.dump(examples, w)
+            #with open(cache_dir, 'wb') as w:
+            #    pickle.dump(examples, w)
 
         return examples
 
@@ -442,7 +442,7 @@ def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
     label_list = processor.get_labels()
 
     if args.parser_model is None:
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}-old.pkl'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}-old'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
@@ -453,7 +453,7 @@ def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
             parser_info += "-3d"
         if args.parser_compute_dist:
             parser_info += "-dist"
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}-old.pkl'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}-old'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
@@ -462,8 +462,8 @@ def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
             args.parser_expand_type))
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        #features = torch.load(cached_features_file)
-        features = pickle.load(open(cached_features_file, 'rb'))
+        features = torch.load(cached_features_file)
+        #features = pickle.load(open(cached_features_file, 'rb'))
     else:
         if args.parser_model is not None:
             if args.parser_type == "dp":
@@ -495,8 +495,9 @@ def load_and_cache_examples(args, tokenizer, examples, data_type='train'):
     
             del biaffine_parser
 
-        with open(cached_features_file, 'wb') as w:
-            pickle.dump(features, w)
+        torch.save(features, cached_features_file)
+        #with open(cached_features_file, 'wb') as w:
+        #    pickle.dump(features, w)
 
     input_ids = []
     attention_mask = []
