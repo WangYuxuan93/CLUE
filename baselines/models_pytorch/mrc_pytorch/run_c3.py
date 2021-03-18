@@ -166,29 +166,22 @@ class c3Processor(DataProcessor):
 
     def _create_examples(self, data, set_type):
         """Creates examples for the training and dev sets."""
-        cache_dir = os.path.join(self.data_dir, set_type + '_examples_c3-old.pkl')
-        if os.path.exists(cache_dir):
-            examples = pickle.load(open(cache_dir, 'rb'))
-        else:
-            examples = []
-            for (i, d) in enumerate(data):
-                answer = -1
-                # 这里data[i]有6个元素，0是context，1是问题，2~5是choice，6是答案
-                for k in range(4):
-                    if data[i][2 + k] == data[i][6]:
-                        answer = str(k)
+        examples = []
+        for (i, d) in enumerate(data):
+            answer = -1
+            # 这里data[i]有6个元素，0是context，1是问题，2~5是choice，6是答案
+            for k in range(4):
+                if data[i][2 + k] == data[i][6]:
+                    answer = str(k)
 
-                label = tokenization.convert_to_unicode(answer)
+            label = tokenization.convert_to_unicode(answer)
 
-                for k in range(4):
-                    guid = "%s-%s-%s" % (set_type, i, k)
-                    text_a = tokenization.convert_to_unicode(data[i][0])
-                    text_b = tokenization.convert_to_unicode(data[i][k + 2])
-                    text_c = tokenization.convert_to_unicode(data[i][1])
-                    examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, text_c=text_c))
-
-            #with open(cache_dir, 'wb') as w:
-            #    pickle.dump(examples, w)
+            for k in range(4):
+                guid = "%s-%s-%s" % (set_type, i, k)
+                text_a = tokenization.convert_to_unicode(data[i][0])
+                text_b = tokenization.convert_to_unicode(data[i][k + 2])
+                text_c = tokenization.convert_to_unicode(data[i][1])
+                examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, text_c=text_c))
 
         return examples
 

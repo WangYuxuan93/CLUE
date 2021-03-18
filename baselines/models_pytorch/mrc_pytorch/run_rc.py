@@ -21,6 +21,8 @@ from transformers import (WEIGHTS_NAME, BertConfig, BertTokenizer,
                           BertForMultipleChoice, BertForQuestionAnswering)
 
 from transformers import AdamW, get_linear_schedule_with_warmup
+from tools.pytorch_optimization import BERTAdam
+
 from metrics.mrc_compute_metrics import compute_metrics
 from processors import mrc_output_modes as output_modes
 from processors import mrc_processors as processors
@@ -138,11 +140,21 @@ def train(args, train_dataset, model, tokenizer):
          'weight_decay': args.weight_decay},
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(
+    logger.info("  Optimizer: %s", args.optim)
+    if args.optim == 'AdamW': 
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+        scheduler = get_linear_schedule_with_warmup(
                     optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
             )
-    #WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
+    elif args.optim == 'BERTAdam':
+        optimizer = BERTAdam(params=optimizer_grouped_parameters,
+                             lr=args.learning_rate,
+                             warmup=args.warmup_proportion,
+                             max_grad_norm=args.max_grad_norm,
+                             t_total=t_total,
+                             schedule='warmup_linear',
+                             weight_decay_rate=args.weight_decay)
+
     if args.fp16:
         try:
             from apex import amp
@@ -208,13 +220,15 @@ def train(args, train_dataset, model, tokenizer):
                 torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                if args.optim == 'AdamW':
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             pbar(step, {'loss': loss.item()})
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 optimizer.step()
-                scheduler.step()  # Update learning rate schedule
+                if args.optim == 'AdamW':
+                    scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
 
@@ -443,6 +457,7 @@ def main():
     parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
 
     ## Other parameters
+    parser.add_argument("--optim", default="AdamW", type=str, choices=["AdamW","BERTAdam"], help="Type of optimizer")
     parser.add_argument("--config_name", default="", type=str,
                         help="Pretrained config name or path if not the same as model_name")
     parser.add_argument("--tokenizer_name", default="", type=str,

@@ -147,29 +147,22 @@ class c3Processor(DataProcessor):
 
     def _create_examples(self, data, set_type):
         """Creates examples for the training and dev sets."""
-        cache_dir = os.path.join(self.data_dir, set_type + '_examples.pkl')
-        if os.path.exists(cache_dir):
-            examples = pickle.load(open(cache_dir, 'rb'))
-        else:
-            examples = []
-            for (i, d) in enumerate(data):
-                answer = -1
-                # 这里data[i]有6个元素，0是context，1是问题，2~5是choice，6是答案
-                for k in range(4):
-                    if data[i][2 + k] == data[i][6]:
-                        answer = str(k)
+        examples = []
+        for (i, d) in enumerate(data):
+            answer = -1
+            # 这里data[i]有6个元素，0是context，1是问题，2~5是choice，6是答案
+            for k in range(4):
+                if data[i][2 + k] == data[i][6]:
+                    answer = str(k)
 
-                label = tokenization.convert_to_unicode(answer)
+            label = tokenization.convert_to_unicode(answer)
 
-                for k in range(4):
-                    guid = "%s-%s-%s" % (set_type, i, k)
-                    text_a = tokenization.convert_to_unicode(data[i][0])
-                    text_b = tokenization.convert_to_unicode(data[i][k + 2])
-                    text_c = tokenization.convert_to_unicode(data[i][1])
-                    examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, text_c=text_c))
-
-            with open(cache_dir, 'wb') as w:
-                pickle.dump(examples, w)
+            for k in range(4):
+                guid = "%s-%s-%s" % (set_type, i, k)
+                text_a = tokenization.convert_to_unicode(data[i][0])
+                text_b = tokenization.convert_to_unicode(data[i][k + 2])
+                text_c = tokenization.convert_to_unicode(data[i][1])
+                examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, text_c=text_c))
 
         return examples
 
@@ -407,7 +400,7 @@ def load_and_cache_c3_examples(args, task, tokenizer, data_type='train'):
     label_list = processor.get_labels()
 
     if args.parser_model is None:
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}.pkl'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
@@ -418,7 +411,7 @@ def load_and_cache_c3_examples(args, task, tokenizer, data_type='train'):
             parser_info += "-3d"
         if args.parser_compute_dist:
             parser_info += "-dist"
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}.pkl'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
@@ -427,8 +420,8 @@ def load_and_cache_c3_examples(args, task, tokenizer, data_type='train'):
             args.parser_expand_type))
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        #features = torch.load(cached_features_file)
-        features = pickle.load(open(cached_features_file, 'rb'))
+        features = torch.load(cached_features_file)
+        #features = pickle.load(open(cached_features_file, 'rb'))
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
 
@@ -468,8 +461,7 @@ def load_and_cache_c3_examples(args, task, tokenizer, data_type='train'):
     
             del biaffine_parser
 
-        with open(cached_features_file, 'wb') as w:
-            pickle.dump(features, w)
+        torch.save(features, cached_features_file)
 
     input_ids = []
     attention_mask = []
