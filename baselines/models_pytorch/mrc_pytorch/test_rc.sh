@@ -32,7 +32,6 @@ if [ $# == 0 ]; then
       --config_name=data/sbertv2.json \
       --parser_model=$PARSER_MODEL \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
-      --parser_compute_dist \
       --parser_return_tensor \
       --do_train \
       --do_eval \

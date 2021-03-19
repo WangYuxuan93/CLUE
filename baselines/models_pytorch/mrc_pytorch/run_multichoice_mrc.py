@@ -32,13 +32,22 @@ import torch
 from google_albert_pytorch_modeling import AlbertConfig, AlbertForMultipleChoice
 from preprocess.CHID_preprocess import RawResult, get_final_predictions, write_predictions, generate_input, evaluate
 from pytorch_modeling import ALBertConfig, ALBertForMultipleChoice
-from pytorch_modeling import BertConfig, BertForMultipleChoice
-from tools.official_tokenization import BertTokenizer
+#from pytorch_modeling import BertConfig, BertForMultipleChoice
+from transformers import BertConfig, BertForMultipleChoice, BertTokenizer
+#from tools.official_tokenization import BertTokenizer
 from tools.pytorch_optimization import get_optimization, warmup_linear
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm
 
+from tools.train_utils import delete_old_checkpoints
+import json
+import logging
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
+                    datefmt='%m/%d/%Y %H:%M:%S',
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+"""
 def reset_model(args, bert_config, model_cls):
     # Prepare model
     model = model_cls(bert_config, num_choices=args.max_num_choices)
@@ -72,21 +81,28 @@ def reset_model(args, bert_config, model_cls):
         model.half()
 
     return model
-
+"""
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu_ids", default='', required=True, type=str)
-    parser.add_argument("--bert_config_file", required=True,
-                        default='check_points/pretrain_models/roberta_wwm_ext_large/bert_config.json')
-    parser.add_argument("--vocab_file", required=True,
-                        default='check_points/pretrain_models/roberta_wwm_ext_large/vocab.txt')
-    parser.add_argument("--init_restore_dir", required=True,
-                        default='check_points/pretrain_models/roberta_wwm_ext_large/pytorch_model.pth')
+    #parser.add_argument("--gpu_ids", default='', required=True, type=str)
+    parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
+                        help="Path to pre-trained model or shortcut name")
+    #parser.add_argument("--bert_config_file", required=True,
+    #                    default='check_points/pretrain_models/roberta_wwm_ext_large/bert_config.json')
+    #parser.add_argument("--vocab_file", required=True,
+    #                    default='check_points/pretrain_models/roberta_wwm_ext_large/vocab.txt')
+    #parser.add_argument("--init_restore_dir", required=True,
+    #                    default='check_points/pretrain_models/roberta_wwm_ext_large/pytorch_model.pth')
     parser.add_argument("--input_dir", required=True, default='dataset/CHID')
     parser.add_argument("--output_dir", required=True, default='check_points/CHID')
 
     ## Other parameters
+    parser.add_argument("--max_steps", default=-1, type=int,
+                        help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
+    parser.add_argument('--logging_steps', type=int, default=10, help="Log every X updates steps.")
+    parser.add_argument('--save_steps', type=int, default=1000, help="Save checkpoint every X updates steps.")
+    parser.add_argument('--log_file', type=str, default='log.txt')
     parser.add_argument("--train_file", default='./origin_data/CHID/train.json', type=str,
                         help="SQuAD json for training. E.g., train-v1.1.json")
     parser.add_argument("--train_ans_file", default='./origin_data/CHID/train_answer.json', type=str,
@@ -118,17 +134,20 @@ def main():
 
     args = parser.parse_args()
     print(args)
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+    #os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     n_gpu = torch.cuda.device_count()
-    print("device: {} n_gpu: {}, 16-bits training: {}".format(device, n_gpu, args.fp16))
+    logger.info("device: {} n_gpu: {}, 16-bits training: {}".format(device, n_gpu, args.fp16))
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
             args.gradient_accumulation_steps))
 
     args.train_batch_size = int(args.train_batch_size / args.gradient_accumulation_steps)
+    args.log_file = os.path.join(args.output_dir, args.log_file)
+    if os.path.exists(args.log_file):
+        os.remove(args.log_file)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -141,9 +160,9 @@ def main():
     if os.path.exists(args.output_dir) == False:
         os.makedirs(args.output_dir, exist_ok=True)
 
-    tokenizer = BertTokenizer(vocab_file=args.vocab_file, do_lower_case=args.do_lower_case)
+    tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path, do_lower_case=args.do_lower_case)
 
-    print('ready for train dataset')
+    #print('ready for train dataset')
 
     train_example_file = os.path.join(args.input_dir, 'train_examples_{}.pkl'.format(str(args.max_seq_length)))
     train_feature_file = os.path.join(args.input_dir, 'train_features_{}.pkl'.format(str(args.max_seq_length)))
@@ -160,14 +179,14 @@ def main():
                                    max_seq_length=args.max_seq_length, max_num_choices=args.max_num_choices,
                                    is_training=False)
 
-    print("train features {}".format(len(train_features)))
+    #print("train features {}".format(len(train_features)))
     num_train_steps = int(
         len(train_features) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
-    print("loaded train dataset")
-    print("Num generate examples = {}".format(len(train_features)))
-    print("Batch size = {}".format(args.train_batch_size))
-    print("Num steps for a epoch = {}".format(num_train_steps))
+    logger.info("***** Running training *****")
+    logger.info("  Num examples = %d", len(train_features))
+    logger.info("  Batch size = %d", args.train_batch_size)
+    logger.info("  Num steps = %d", num_train_steps)
 
     all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
     all_input_masks = torch.tensor([f.input_masks for f in train_features], dtype=torch.long)
@@ -194,6 +213,7 @@ def main():
     eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.predict_batch_size)
 
     # Prepare model
+    """
     if 'albert' in args.bert_config_file:
         if 'google' in args.bert_config_file:
             bert_config = AlbertConfig.from_json_file(args.bert_config_file)
@@ -202,8 +222,11 @@ def main():
             bert_config = ALBertConfig.from_json_file(args.bert_config_file)
             model = reset_model(args, bert_config, ALBertForMultipleChoice)
     else:
-        bert_config = BertConfig.from_json_file(args.bert_config_file)
-        model = reset_model(args, bert_config, BertForMultipleChoice)
+        #bert_config = BertConfig.from_json_file(args.bert_config_file)
+        #model = reset_model(args, bert_config, BertForMultipleChoice)
+    """
+    bert_config = BertConfig.from_pretrained(args.model_name_or_path)
+    model = BertForMultipleChoice.from_pretrained(args.model_name_or_path, config=bert_config)
     model = model.to(device)
     if n_gpu > 1:
         model = torch.nn.DataParallel(model)
@@ -221,6 +244,8 @@ def main():
     global_step = 0
     best_acc = 0
     acc = 0
+    log_history = []
+    trainer_state = {'best_metric':0, 'best_checkpoint':None, 'epoch': int(args.num_train_epochs)}
     for i in range(int(args.num_train_epochs)):
         num_step = 0
         average_loss = 0
@@ -232,13 +257,14 @@ def main():
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch)  # multi-gpu does scattering it-self
                 input_ids, input_masks, segment_ids, choice_masks, labels = batch
-                if step == 0 and i == 0:
-                    print('shape of input_ids: {}'.format(input_ids.shape))
-                    print('shape of labels: {}'.format(labels.shape))
-                loss = model(input_ids=input_ids,
+                #if step == 0 and i == 0:
+                #    print('shape of input_ids: {}'.format(input_ids.shape))
+                #    print('shape of labels: {}'.format(labels.shape))
+                outputs = model(input_ids=input_ids,
                              token_type_ids=segment_ids,
                              attention_mask=input_masks,
                              labels=labels)
+                loss, _ = outputs[:2]
                 if n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu.
                 if args.gradient_accumulation_steps > 1:
@@ -253,65 +279,106 @@ def main():
                         param_group['lr'] = lr_this_step
                 else:
                     loss.backward()
+                average_loss += loss.item()
+
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     optimizer.step()
                     optimizer.zero_grad()
                     global_step += 1
+                    num_step += 1
+                    pbar.set_postfix({'loss': '{0:1.5f}'.format(average_loss / (num_step + 1e-5))})
+                    pbar.update(1)
 
-                average_loss += loss.item()
-                num_step += 1
+                    if args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                        result = {'global_step': global_step,
+                                  'loss': average_loss / (num_step + 1e-5)}
+                        log_history.append(result)
 
-                pbar.set_postfix({'loss': '{0:1.5f}'.format(average_loss / (num_step + 1e-5))})
-                pbar.update(1)
+                    if args.save_steps > 0 and global_step % args.save_steps == 0:
+                        #print("***** Running predictions *****")
+                        #print("Num split examples = {}".format(len(eval_features)))
+                        #print("Batch size = {}".format(args.predict_batch_size))
+                        model.eval()
+                        all_results = []
+                        #print("Start evaluating")
+                        for input_ids, input_masks, segment_ids, choice_masks, example_indices in tqdm(eval_dataloader,
+                                                                                                       desc="Evaluating",
+                                                                                                       disable=None):
+                            #if len(all_results) == 0:
+                            #    print('shape of input_ids: {}'.format(input_ids.shape))
+                            input_ids = input_ids.to(device)
+                            input_masks = input_masks.to(device)
+                            segment_ids = segment_ids.to(device)
+                            with torch.no_grad():
+                                batch_logits = model(input_ids=input_ids,
+                                                     token_type_ids=segment_ids,
+                                                     attention_mask=input_masks,
+                                                     labels=None)[0]
+                            for i, example_index in enumerate(example_indices):
+                                logits = batch_logits[i].detach().cpu().tolist()
+                                eval_feature = eval_features[example_index.item()]
+                                unique_id = int(eval_feature.unique_id)
+                                all_results.append(RawResult(unique_id=unique_id,
+                                                             example_id=all_example_ids[unique_id],
+                                                             tag=all_tags[unique_id],
+                                                             logit=logits))
 
-        print("***** Running predictions *****")
-        print("Num split examples = {}".format(len(eval_features)))
-        print("Batch size = {}".format(args.predict_batch_size))
+                        predict_file = 'dev_predictions.json'
+                        #print('decoder raw results')
+                        tmp_predict_file = os.path.join(args.output_dir, "raw_predictions.pkl")
+                        output_prediction_file = os.path.join(args.output_dir, predict_file)
+                        results = get_final_predictions(all_results, tmp_predict_file, g=True)
+                        write_predictions(results, output_prediction_file)
+                        #print('predictions saved to {}'.format(output_prediction_file))
 
-        model.eval()
-        all_results = []
-        print("Start evaluating")
-        for input_ids, input_masks, segment_ids, choice_masks, example_indices in tqdm(eval_dataloader,
-                                                                                       desc="Evaluating",
-                                                                                       disable=None):
-            if len(all_results) == 0:
-                print('shape of input_ids: {}'.format(input_ids.shape))
-            input_ids = input_ids.to(device)
-            input_masks = input_masks.to(device)
-            segment_ids = segment_ids.to(device)
-            with torch.no_grad():
-                batch_logits = model(input_ids=input_ids,
-                                     token_type_ids=segment_ids,
-                                     attention_mask=input_masks,
-                                     labels=None)
-            for i, example_index in enumerate(example_indices):
-                logits = batch_logits[i].detach().cpu().tolist()
-                eval_feature = eval_features[example_index.item()]
-                unique_id = int(eval_feature.unique_id)
-                all_results.append(RawResult(unique_id=unique_id,
-                                             example_id=all_example_ids[unique_id],
-                                             tag=all_tags[unique_id],
-                                             logit=logits))
+                        #if args.predict_ans_file:
+                        acc = evaluate(args.predict_ans_file, output_prediction_file)
 
-        predict_file = 'dev_predictions.json'
-        print('decoder raw results')
-        tmp_predict_file = os.path.join(args.output_dir, "raw_predictions.pkl")
-        output_prediction_file = os.path.join(args.output_dir, predict_file)
-        results = get_final_predictions(all_results, tmp_predict_file, g=True)
-        write_predictions(results, output_prediction_file)
-        print('predictions saved to {}'.format(output_prediction_file))
+                        result = {'global_step': global_step,
+                                  'eval_accuracy': acc}
+                        log_history.append(result)
 
-        if args.predict_ans_file:
-            acc = evaluate(args.predict_ans_file, output_prediction_file)
-            print(f'{args.predict_file} 预测精度：{acc}')
+                        logger.info("***** Eval results (global step=%d) *****" % global_step)
+                        for key in sorted(result.keys()):
+                            logger.info("  %s = %s", key, str(result[key]))
 
-        # Save a epoch trained model
-        if acc > best_acc:
-            best_acc = acc
-            output_model_file = os.path.join(args.output_dir, "best_checkpoint.bin")
-            print('save trained model from {}'.format(output_model_file))
-            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-            torch.save(model_to_save.state_dict(), output_model_file)
+                        with open(args.log_file, 'a') as aw:
+                            aw.write("-------------------global steps:{}-------------------\n".format(global_step))
+                            aw.write(str(json.dumps(result, indent=2)) + '\n')
+
+
+                        if acc > trainer_state['best_metric']:
+                            # Save model checkpoint
+                            output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+                            trainer_state['best_checkpoint'] = output_dir
+                            trainer_state['best_metric'] = acc
+
+                            if not os.path.exists(output_dir):
+                                os.makedirs(output_dir)
+                            model_to_save = model.module if hasattr(model,
+                                                                    'module') else model  # Take care of distributed/parallel training
+                            model_to_save.save_pretrained(output_dir)
+                            torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                            logger.info("Saving model checkpoint to %s", output_dir)
+                            tokenizer.save_pretrained(output_dir)
+                            #torch.save(model.state_dict(), os.path.join(args.output_dir, "model_best.pt"))
+                            delete_old_checkpoints(args.output_dir, trainer_state['best_checkpoint'])
+
+                        """
+                        # Save a epoch trained model
+                        if acc > best_acc:
+                            best_acc = acc
+                            output_model_file = os.path.join(args.output_dir, "best_checkpoint.bin")
+                            print('save trained model from {}'.format(output_model_file))
+                            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+                            torch.save(model_to_save.state_dict(), output_model_file)
+                        """
+
+    trainer_state['global_step'] = global_step
+    trainer_state['log_history'] = log_history
+    state_path = os.path.join(args.output_dir, 'trainer_state.json')
+    with open(state_path, 'w') as f:
+        json.dump(trainer_state, f,indent=4)
 
 
 if __name__ == "__main__":

@@ -297,6 +297,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length=128, max_nu
             print("tag_index: {}".format(pos))
             print("tokens: {}".format("".join(tokens)))
             print("choice_masks: {}".format(choice_masks))
+            print("input_ids: {}".format(input_ids))
         while len(input_ids) < max_num_choices:
             input_ids.append([0] * max_seq_length)
             input_masks.append([0] * max_seq_length)
@@ -339,6 +340,8 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length=128, max_nu
 
 
 def logits_matrix_to_array(logits_matrix, index_2_idiom):
+    # in each example, one choice can only be chosen once
+    # this method assure this rule
     """从矩阵中计算全局概率最大的序列"""
     logits_matrix = np.array(logits_matrix)
     logits_matrix = np.transpose(logits_matrix)
@@ -379,7 +382,6 @@ def get_final_predictions(all_results, tmp_predict_file, g=True):
             raw_results[example_id] = [(elem.tag, elem.logit)]
         else:
             raw_results[example_id].append((elem.tag, elem.logit))
-
     results = []
     for example_id, elem in raw_results.items():
         index_2_idiom = {index: tag for index, (tag, logit) in enumerate(elem)}
@@ -436,5 +438,5 @@ def evaluate(ans_f, pre_f):
             acc_num += 1
 
     acc = acc_num / total_num
-    acc *= 100
+    #acc *= 100
     return acc

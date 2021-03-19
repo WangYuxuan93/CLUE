@@ -960,7 +960,7 @@ def main():
 
                         if args.logging_steps > 0 and global_step % args.logging_steps == 0:
                             result = {'global_step': global_step,
-                                      'loss': tr_loss / nb_tr_steps}
+                                      'loss': tr_loss / (nb_tr_steps + 1e-5)}
                             log_history.append(result)
 
                         if args.do_eval and args.save_steps > 0 and global_step % args.save_steps == 0:
