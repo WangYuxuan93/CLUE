@@ -383,6 +383,12 @@ if __name__ == '__main__':
         del optimizer
         torch.cuda.empty_cache()
 
+    trainer_state['global_step'] = global_step
+    trainer_state['log_history'] = log_history
+    state_path = os.path.join(args.output_dir, 'trainer_state.json')
+    with open(state_path, 'w') as f:
+        json.dump(trainer_state, f,indent=4)
+
     #print('Mean F1:', np.mean(F1s), 'Mean EM:', np.mean(EMs))
     #print('Best F1:', np.max(F1s), 'Best EM:', np.max(EMs))
     #with open(args.log_file, 'a') as aw:
