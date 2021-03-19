@@ -28,6 +28,7 @@ from processors import mrc_output_modes as output_modes
 from processors import mrc_processors as processors
 from processors import collate_fns
 from processors import example_loaders
+from processors import label_lists
 #from processors import load_and_cache_c3_examples as load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
@@ -678,7 +679,7 @@ def main():
             prefix = checkpoint.split('/')[-1] if checkpoint.find('checkpoint') != -1 else ""
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
-            predict(args, model, tokenizer, label_list, prefix=prefix)
+            predict(args, model, tokenizer, label_lists[args.task_name], prefix=prefix)
 
 
 if __name__ == "__main__":
