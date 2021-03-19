@@ -191,9 +191,9 @@ def get_eval(original_file, prediction_file):
     F1, EM, TOTAL, SKIP = evaluate(ground_truth_file, prediction_file)
     AVG = (EM + F1) * 0.5
     output_result = OrderedDict()
-    output_result['AVERAGE'] = '%.3f' % AVG
-    output_result['F1'] = '%.3f' % F1
-    output_result['EM'] = '%.3f' % EM
+    output_result['AVERAGE'] = '%.4f' % AVG
+    output_result['F1'] = '%.4f' % F1
+    output_result['EM'] = '%.4f' % EM
     output_result['TOTAL'] = TOTAL
     output_result['SKIP'] = SKIP
 
