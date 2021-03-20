@@ -394,7 +394,7 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
     return features
 
 
-def load_and_cache_c3_examples(args, task, tokenizer, data_type='train'):
+def load_and_cache_c3_examples(args, task, tokenizer, data_type='train', return_features=False):
 
     processor = c3Processor(args.data_dir)
     label_list = processor.get_labels()
@@ -509,4 +509,6 @@ def load_and_cache_c3_examples(args, task, tokenizer, data_type='train'):
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids, 
                                     all_heads, all_rels)
 
+    if return_features:
+        return features, dataset
     return dataset

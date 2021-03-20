@@ -29,6 +29,7 @@ from processors import mrc_processors as processors
 from processors import collate_fns
 from processors import example_loaders
 from processors import label_lists
+from processors.chid_processor import RawResult, get_final_predictions
 #from processors import load_and_cache_c3_examples as load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
@@ -123,6 +124,7 @@ def delete_old_checkpoints(output_dir, best_checkpoint, save_limit=1):
         logger.info("Deleting older checkpoint [{}] due to save_limit".format(checkpoint))
         shutil.rmtree(checkpoint)
 
+
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
@@ -199,15 +201,9 @@ def train(args, train_dataset, model, tokenizer):
             model.train()
             #batch = tuple(t.to(args.device) for t in batch)
             inputs = _prepare_inputs(batch, args.device)
+            if args.task_name == 'chid' and 'example_indices' in inputs:
+                del inputs['example_indices']
             #print ("batch:\n", batch)
-            """
-            inputs = {'input_ids': batch[0],
-                      'attention_mask': batch[1],
-                      'labels': batch[3]}
-            if args.model_type != 'distilbert':
-                inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet', 'albert',
-                                                                           'roberta'] else None  # XLM, DistilBERT don't use segment_ids
-            """
 
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
@@ -284,7 +280,8 @@ def evaluate(args, model, tokenizer, prefix=""):
     eval_outputs_dirs = (args.output_dir,)
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
-        eval_dataset = example_loaders[args.task_name](args, eval_task, tokenizer, data_type='dev')
+        eval_dataset, eval_features = example_loaders[args.task_name](args, eval_task, tokenizer, 
+                                                        data_type='dev', return_features=True)
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
 
@@ -294,6 +291,10 @@ def evaluate(args, model, tokenizer, prefix=""):
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
                                      collate_fn=collate_fns[args.task_name])
 
+        if args.task_name == 'chid':
+            all_tags = [f.tag for f in eval_features]
+            all_example_ids = [f.example_id for f in eval_features]
+
         # Eval!
         logger.info("********* Running evaluation {} ********".format(prefix))
         eval_loss = 0.0
@@ -301,19 +302,16 @@ def evaluate(args, model, tokenizer, prefix=""):
         preds = None
         out_label_ids = None
         pbar = ProgressBar(n_total=len(eval_dataloader), desc="Evaluating")
+        all_predictions = []
         for step, batch in enumerate(eval_dataloader):
             model.eval()
             #batch = tuple(t.to(args.device) for t in batch)
             with torch.no_grad():
                 inputs = _prepare_inputs(batch, args.device)
-                """
-                inputs = {'input_ids': batch[0],
-                          'attention_mask': batch[1],
-                          'labels': batch[3]}
-                if args.model_type != 'distilbert':
-                    inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet', 'albert',
-                                                                               'roberta'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
-                """
+                if args.task_name == 'chid':
+                    example_indices = inputs['example_indices']
+                    del inputs['example_indices']
+
                 outputs = model(**inputs)
                 tmp_eval_loss, logits = outputs[:2]
                 eval_loss += tmp_eval_loss.mean().item()
@@ -325,11 +323,25 @@ def evaluate(args, model, tokenizer, prefix=""):
                 preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
                 out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
             pbar(step)
+            
+            if args.task_name == 'chid':
+                for i, example_index in enumerate(example_indices):
+                    logits_ = logits[i].detach().cpu().tolist()
+                    eval_feature = eval_features[example_index.item()]
+                    unique_id = int(eval_feature.unique_id)
+                    all_predictions.append(RawResult(unique_id=unique_id,
+                                                 example_id=all_example_ids[unique_id],
+                                                 tag=all_tags[unique_id],
+                                                 logit=logits_))
         print(' ')
         if 'cuda' in str(args.device):
             torch.cuda.empty_cache()
         eval_loss = eval_loss / nb_eval_steps
-        if args.output_mode == "classification":
+        if args.task_name == 'chid':
+            preds = get_final_predictions(all_predictions, g=True)
+            #print ("preds:\n", preds)
+            preds = [p[1] for p in preds]
+        elif args.output_mode == "classification":
             preds = np.argmax(preds, axis=1)
         elif args.output_mode == "regression":
             preds = np.squeeze(preds)
@@ -350,7 +362,8 @@ def predict(args, model, tokenizer, label_list, prefix=""):
     label_map = {i: label for i, label in enumerate(label_list)}
 
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
-        pred_dataset = example_loaders[args.task_name](args, pred_task, tokenizer, data_type='test')
+        pred_dataset, pred_features = example_loaders[args.task_name](args, pred_task, tokenizer, 
+                                                            data_type='test', return_features=True)
         if not os.path.exists(pred_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(pred_output_dir)
 
@@ -360,27 +373,32 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         pred_dataloader = DataLoader(pred_dataset, sampler=pred_sampler, batch_size=args.pred_batch_size,
                                      collate_fn=collate_fns[args.task_name])
 
+        if args.task_name == 'chid':
+            all_tags = [f.tag for f in pred_features]
+            all_example_ids = [f.example_id for f in pred_features]
+
         logger.info("******** Running prediction {} ********".format(prefix))
         logger.info("  Num examples = %d", len(pred_dataset))
         logger.info("  Batch size = %d", args.pred_batch_size)
         nb_pred_steps = 0
         preds = None
         pbar = ProgressBar(n_total=len(pred_dataloader), desc="Predicting")
+        all_predictions = []
         for step, batch in enumerate(pred_dataloader):
             model.eval()
             #batch = tuple(t.to(args.device) for t in batch)
             with torch.no_grad():
-                """
-                inputs = {'input_ids': batch[0],
-                          'attention_mask': batch[1],
-                          'labels': batch[3]}
-                if args.model_type != 'distilbert':
-                    inputs['token_type_ids'] = batch[2] if (
-                            'bert' in args.model_type or 'xlnet' in args.model_type) else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
-                """
                 inputs = _prepare_inputs(batch, args.device)
+                if args.task_name == 'chid':
+                    example_indices = inputs['example_indices']
+                    del inputs['example_indices']
+                    del inputs['labels']
+
                 outputs = model(**inputs)
-                _, logits = outputs[:2]
+                if len(outputs) == 1:
+                    logits = outputs[0]
+                else:
+                    _, logits = outputs[:2]
             nb_pred_steps += 1
             if preds is None:
                 if pred_task == 'copa':
@@ -393,8 +411,21 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                 else:
                     preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
             pbar(step)
+
+            if args.task_name == 'chid':
+                for i, example_index in enumerate(example_indices):
+                    logits_ = logits[i].detach().cpu().tolist()
+                    pred_feature = pred_features[example_index.item()]
+                    unique_id = int(pred_feature.unique_id)
+                    all_predictions.append(RawResult(unique_id=unique_id,
+                                                 example_id=all_example_ids[unique_id],
+                                                 tag=all_tags[unique_id],
+                                                 logit=logits_))
         print(' ')
-        if args.output_mode == "classification":
+        if args.task_name == 'chid':
+            preds = get_final_predictions(all_predictions, g=True)
+            #print ("preds:\n", preds)
+        elif args.output_mode == "classification":
             predict_label = np.argmax(preds, axis=1)
         elif args.output_mode == "regression":
             predict_label = np.squeeze(preds)
@@ -412,11 +443,17 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         output_logits_file = os.path.join(pred_output_dir, prefix, "test_logits")
         # 保存标签结果
         with open(output_submit_file, "w") as writer:
-            for i, pred in enumerate(predict_label):
+            if args.task_name == 'chid':
                 json_d = {}
-                json_d['id'] = i
-                json_d['label'] = str(label_map[pred])
-                writer.write(json.dumps(json_d) + '\n')
+                for tag, pred in preds:
+                    json_d[tag] = pred
+                json.dump(json_d, writer, indent=4)
+            else:
+                for i, pred in enumerate(predict_label):
+                    json_d = {}
+                    json_d['id'] = i
+                    json_d['label'] = str(label_map[pred])
+                    writer.write(json.dumps(json_d) + '\n')
         # 保存中间预测结果
         save_numpy(file_path=output_logits_file, data=preds)
 

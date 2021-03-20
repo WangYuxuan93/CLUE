@@ -34,18 +34,19 @@ def chid_collate_fn(batch):
     num_items = len(batch[0])
     all_heads, all_rels, all_dists = None, None, None
 
-    if num_items == 5:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels = map(torch.stack, zip(*batch))
-    elif num_items == 7:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
+    if num_items == 6:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_example_index = map(torch.stack, zip(*batch))
     elif num_items == 8:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
+        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_example_index, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 9:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, all_labels, all_example_index, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
     
     batch = {}
     batch["input_ids"] = all_input_ids
     batch["attention_mask"] = all_attention_mask
     batch["token_type_ids"] = all_token_type_ids
     batch["labels"] = all_labels
+    batch["example_indices"] = all_example_index
     batch["heads"] = all_heads
     batch["rels"] = all_rels
     batch["dists"] = all_dists
@@ -502,6 +503,7 @@ def convert_parsed_examples_to_features(
             dists = compute_distance(heads, attention_mask_list)
 
         if unique_id < 5:
+            torch.set_printoptions(profile="full")
             print("*** Example ***")
             print("unique_id: {}".format(unique_id))
             print("context_id: {}".format(tag))
@@ -509,6 +511,9 @@ def convert_parsed_examples_to_features(
             print("tag_index: {}".format(pos))
             print("tokens: {}".format("".join(tokens)))
             print("choice_masks: {}".format(choice_masks))
+            print("input_ids:\n", input_ids)
+            print("heads:\n", heads)
+            print("rels:\n", rels)
 
         while len(input_ids) < max_num_choices:
             input_ids.append([0] * max_seq_length)
@@ -600,9 +605,9 @@ def logits_matrix_max_array(logits_matrix, index_2_idiom):
     return results
 
 
-def get_final_predictions(all_results, tmp_predict_file, g=True):
-    if not os.path.exists(tmp_predict_file):
-        pickle.dump(all_results, open(tmp_predict_file, 'wb'))
+def get_final_predictions(all_results, g=True):
+    #if not os.path.exists(tmp_predict_file):
+    #    pickle.dump(all_results, open(tmp_predict_file, 'wb'))
 
     raw_results = {}
     for i, elem in enumerate(all_results):
@@ -654,7 +659,7 @@ def generate_input(data_file, label_file, example_file, feature_file, tokenizer,
     return features
 
 
-def load_and_cache_chid_examples(args, task, tokenizer, data_type='train'):
+def load_and_cache_chid_examples(args, task, tokenizer, data_type='train', return_features=False):
 
     #cached_example_file = os.path.join(args.data_dir, 'example_{}_{}.pkl'.format(
     #        data_type,
@@ -685,11 +690,11 @@ def load_and_cache_chid_examples(args, task, tokenizer, data_type='train'):
 
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
-        features = pickle.load(open(cached_features_file, 'rb'))
+        features = torch.load(cached_features_file)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
 
-        examples = read_chid_examples(data_file, label_file, is_training=True if data_type=='train' else False)
+        examples = read_chid_examples(data_file, label_file, is_training=True if data_type in ['train','dev'] else False)
 
         if args.parser_model is not None:
             if args.parser_type == "dp":
@@ -720,54 +725,49 @@ def load_and_cache_chid_examples(args, task, tokenizer, data_type='train'):
     
             del biaffine_parser
 
-        with open(cached_features_file, 'wb') as w:
-            pickle.dump(features, w)
+        torch.save(features, cached_features_file)
 
 
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
     all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
     all_choice_masks = torch.tensor([f.choice_masks for f in features], dtype=torch.long)
-    if data_type == 'train':
+    
+    all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+    if data_type in ['train','dev']:
         all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
     else:
         all_example_ids = [f.example_id for f in features]
         all_tags = [f.tag for f in features]
-        all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+        # this will not be used in predict
+        all_labels = all_example_index
+        #all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
     
-
     if args.parser_model is None:
-        if data_type == 'train':
+        """
+        if data_type in ['train','dev']:
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
                                     all_labels)
         else:
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks,
                                     all_example_index)
+        """
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
+                                all_labels, all_example_index)
     else:
-        heads = []
-        rels = []
-        dists = []
-        for f in features:
-            heads.append([])
-            rels.append([])
-            if args.parser_compute_dist:
-                dists.append([])
-            for i in range(n_class):
-                heads[-1].append(f[i].heads)
-                rels[-1].append(f[i].rels)
-                if args.parser_compute_dist:
-                    dists[-1].append(f[i].dists)
-        all_heads = torch.stack([torch.stack(tup) for tup in heads])
-        all_rels = torch.stack([torch.stack(tup) for tup in rels])
-        
+        all_heads = torch.stack([f.heads for f in features])
+        all_rels = torch.stack([f.rels for f in features])
+            
         if args.parser_compute_dist:
-            all_dists = torch.stack([torch.stack(tup) for tup in dists])
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids,
-                                    all_heads, all_rels, all_dists)
+            all_dists = torch.stack([f.dists for f in features])
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
+                                    all_labels, all_example_index, all_heads, all_rels, all_dists)
         else:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_label_ids, 
-                                    all_heads, all_rels)
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
+                                    all_labels, all_example_index, all_heads, all_rels)
 
+    if return_features:
+        return dataset, features
     return dataset
 
 

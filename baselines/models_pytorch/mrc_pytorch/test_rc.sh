@@ -4,7 +4,7 @@
 # @Last Modified by:   bo.shi
 # @Last Modified time: 2020-01-01 11:46:07
 
-TASK_NAME="c3"
+TASK_NAME="chid"
 MODEL_NAME="bert-base-chinese"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
@@ -42,7 +42,7 @@ if [ $# == 0 ]; then
       --per_gpu_eval_batch_size=16 \
       --learning_rate=2e-5 \
       --num_train_epochs=3.0 \
-      --max_steps=15 \
+      --max_steps=10 \
       --logging_steps=3 \
       --save_steps=3 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
@@ -56,7 +56,6 @@ elif [ $1 == "predict" ]; then
       --task_name=$TASK_NAME \
       --parser_model=$PARSER_MODEL \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
-      --parser_compute_dist \
       --parser_return_tensor \
       --do_predict \
       --do_lower_case \
@@ -64,11 +63,6 @@ elif [ $1 == "predict" ]; then
       --max_seq_length=16 \
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=16 \
-      --learning_rate=2e-5 \
-      --num_train_epochs=3.0 \
-      --logging_steps=3335 \
-      --save_steps=3335 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
-      --overwrite_output_dir \
-      --seed=42
+      --overwrite_output_dir 
 fi
