@@ -4,7 +4,7 @@
 # @Last Modified by:   bo.shi
 # @Last Modified time: 2020-01-01 11:46:07
 
-TASK_NAME="chid"
+TASK_NAME="cmrc2018"
 MODEL_NAME="bert-base-chinese"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
@@ -30,21 +30,20 @@ if [ $# == 0 ]; then
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
       --config_name=data/sbertv2.json \
-      --parser_model=$PARSER_MODEL \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
       --parser_return_tensor \
       --do_train \
       --do_eval \
       --do_lower_case \
       --data_dir=$GLUE_DATA_DIR/${TASK_NAME}/ \
-      --max_seq_length=16 \
+      --max_seq_length=128 \
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=16 \
       --learning_rate=2e-5 \
       --num_train_epochs=3.0 \
-      --max_steps=10 \
-      --logging_steps=3 \
-      --save_steps=3 \
+      --max_steps=0 \
+      --logging_steps=10 \
+      --save_steps=10 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
       --overwrite_output_dir \
       --seed=42

@@ -21,7 +21,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-RawResult = collections.namedtuple("RawResult",
+ChidRawResult = collections.namedtuple("ChidRawResult",
                                    ["unique_id", "example_id", "tag", "logit"])
 
 SPIECE_UNDERLINE = '▁'
@@ -538,9 +538,9 @@ def convert_parsed_examples_to_features(
                     token_type_ids=token_type_ids,
                     choice_masks=choice_masks,
                     label=label,
-                    heads=heads,
-                    rels=rels,
-                    dists=dists))
+                    heads=heads.to_sparse(),
+                    rels=rels.to_sparse(),
+                    dists=dists.to_sparse()))
         else:
             features.append(
                 InputParsedFeatures(
@@ -553,8 +553,8 @@ def convert_parsed_examples_to_features(
                     token_type_ids=token_type_ids,
                     choice_masks=choice_masks,
                     label=label,
-                    heads=heads,
-                    rels=rels))
+                    heads=heads.to_sparse(),
+                    rels=rels.to_sparse()))
 
     max_tokens_for_doc = max_seq_length - 3  # [CLS] choice [SEP] document [SEP]
     features = []
@@ -659,12 +659,8 @@ def generate_input(data_file, label_file, example_file, feature_file, tokenizer,
     return features
 
 
-def load_and_cache_chid_examples(args, task, tokenizer, data_type='train', return_features=False):
-
-    #cached_example_file = os.path.join(args.data_dir, 'example_{}_{}.pkl'.format(
-    #        data_type,
-    #        str(task)))
-
+def load_and_cache_chid_examples(args, task, tokenizer, data_type='train', 
+                                 return_examples=False, return_features=False):
     if args.parser_model is None:
         cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
             data_type,
@@ -737,21 +733,11 @@ def load_and_cache_chid_examples(args, task, tokenizer, data_type='train', retur
     if data_type in ['train','dev']:
         all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
     else:
-        all_example_ids = [f.example_id for f in features]
-        all_tags = [f.tag for f in features]
         # this will not be used in predict
         all_labels = all_example_index
         #all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
     
     if args.parser_model is None:
-        """
-        if data_type in ['train','dev']:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
-                                    all_labels)
-        else:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks,
-                                    all_example_index)
-        """
         dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
                                 all_labels, all_example_index)
     else:
@@ -766,9 +752,10 @@ def load_and_cache_chid_examples(args, task, tokenizer, data_type='train', retur
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_choice_masks, 
                                     all_labels, all_example_index, all_heads, all_rels)
 
+    outputs = (dataset,)
     if return_features:
-        return dataset, features
-    return dataset
+        outputs += (features)
+    return outputs
 
 
 def evaluate(ans_f, pre_f):

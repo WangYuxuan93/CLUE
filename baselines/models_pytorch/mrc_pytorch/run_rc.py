@@ -29,7 +29,8 @@ from processors import mrc_processors as processors
 from processors import collate_fns
 from processors import example_loaders
 from processors import label_lists
-from processors.chid_processor import RawResult, get_final_predictions
+from processors.chid_processor import ChidRawResult, get_final_predictions
+from processors.cmrc2018_processor import CmrcRawResult, write_cmrc2018_predictions, compute_cmrc2018_metrics
 #from processors import load_and_cache_c3_examples as load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
@@ -37,7 +38,7 @@ from tools.progressbar import ProgressBar
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
-from transformers import StructuredBertV2Config, StructuredBertV2ForMultipleChoice
+from transformers import StructuredBertV2Config, StructuredBertV2ForMultipleChoice, StructuredBertV2ForQuestionAnswering
 import shutil
 import re
 from pathlib import Path
@@ -54,11 +55,15 @@ from pathlib import Path
 MODEL_CLASSES = {
     'chid': (BertConfig, BertForMultipleChoice, BertTokenizer),
     'c3': (BertConfig, BertForMultipleChoice, BertTokenizer),
+    'cmrc2018': (BertConfig, BertForQuestionAnswering, BertTokenizer),
+    'drcd': (BertConfig, BertForQuestionAnswering, BertTokenizer),
 }
 
 SBERT_MODEL = {
     'chid': StructuredBertV2ForMultipleChoice,
     'c3': StructuredBertV2ForMultipleChoice,
+    'cmrc2018': StructuredBertV2ForQuestionAnswering,
+    'drcd': StructuredBertV2ForQuestionAnswering
 }
 
 
@@ -192,7 +197,11 @@ def train(args, train_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     seed_everything(args.seed)  # Added here for reproductibility (even between python 2 and 3)
-    trainer_state = {'best_metric':0, 'best_checkpoint':None, 'epoch': int(args.num_train_epochs)}
+
+    if args.output_mode == 'classification':
+        args.decision_metric = 'acc'
+    trainer_state = {'best_metric':0, 'decision_metric':args.decision_metric, 'best_checkpoint':None, 
+                     'epoch': int(args.num_train_epochs)}
     log_history = []
     steps_every_epoch = len(train_dataloader) / args.train_batch_size
     for epoch in range(int(args.num_train_epochs)):
@@ -201,7 +210,7 @@ def train(args, train_dataset, model, tokenizer):
             model.train()
             #batch = tuple(t.to(args.device) for t in batch)
             inputs = _prepare_inputs(batch, args.device)
-            if args.task_name == 'chid' and 'example_indices' in inputs:
+            if args.task_name in ['chid','cmrc2018'] and 'example_indices' in inputs:
                 del inputs['example_indices']
             #print ("batch:\n", batch)
 
@@ -238,18 +247,25 @@ def train(args, train_dataset, model, tokenizer):
                     # Log metrics
                     if args.local_rank == -1:  # Only evaluate when single GPU otherwise metrics may not average well
                         logger.info("Epoch = {}, Global step = {}".format(epoch, global_step))
-                        result = evaluate(args, model, tokenizer)
+                        result = evaluate(args, model, tokenizer, global_step=global_step)
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     if result is not None:
-                        log_history.append({'step': global_step, 'eval_loss': result['eval_loss'], 
-                                            'eval_acc': result['acc']})
-                    if result is None or result['acc'] > trainer_state['best_metric']:
+                        #log_history.append({'step': global_step, 'eval_loss': result['eval_loss'], 
+                        #                    'eval_acc': result['acc']})
+                        result['step'] = global_step
+                        log_history.append(result)
+                        if args.output_mode == 'classification':
+                            metric = result['acc']
+                        else:
+                            metric = result[args.decision_metric]
+
+                    if result is None or metric > trainer_state['best_metric']:
                         # Save model checkpoint
                         output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-                        if result is not None and result['acc'] > trainer_state['best_metric']:
+                        if result is not None and metric > trainer_state['best_metric']:
                                 trainer_state['best_checkpoint'] = output_dir
-                                trainer_state['best_metric'] = result['acc']
+                                trainer_state['best_metric'] = metric
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir)
                         model_to_save = model.module if hasattr(model,
@@ -275,13 +291,19 @@ def train(args, train_dataset, model, tokenizer):
     return global_step, tr_loss / global_step, trainer_state['best_checkpoint']
 
 
-def evaluate(args, model, tokenizer, prefix=""):
+def evaluate(args, model, tokenizer, prefix="", global_step=0):
     eval_task_names = (args.task_name,)
     eval_outputs_dirs = (args.output_dir,)
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
-        eval_dataset, eval_features = example_loaders[args.task_name](args, eval_task, tokenizer, 
-                                                        data_type='dev', return_features=True)
+        if args.output_mode == 'qa':
+            eval_dataset, eval_features, eval_examples = example_loaders[args.task_name](args, eval_task, 
+                                                            tokenizer, data_type='dev', 
+                                                            return_features=True, return_examples=True)
+        else:
+            eval_dataset, eval_features = example_loaders[args.task_name](args, eval_task, 
+                                                            tokenizer, data_type='dev', 
+                                                            return_features=True, return_examples=False)
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
 
@@ -308,20 +330,24 @@ def evaluate(args, model, tokenizer, prefix=""):
             #batch = tuple(t.to(args.device) for t in batch)
             with torch.no_grad():
                 inputs = _prepare_inputs(batch, args.device)
-                if args.task_name == 'chid':
+                if args.task_name in ['chid', 'cmrc2018', 'drcd']:
                     example_indices = inputs['example_indices']
                     del inputs['example_indices']
 
                 outputs = model(**inputs)
-                tmp_eval_loss, logits = outputs[:2]
+                if args.output_mode == 'qa':
+                    tmp_eval_loss, batch_start_logits, batch_end_logits = outputs
+                else:
+                    tmp_eval_loss, logits = outputs[:2]
                 eval_loss += tmp_eval_loss.mean().item()
             nb_eval_steps += 1
-            if preds is None:
-                preds = logits.detach().cpu().numpy()
-                out_label_ids = inputs['labels'].detach().cpu().numpy()
-            else:
-                preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
+            if args.output_mode != 'qa':
+                if preds is None:
+                    preds = logits.detach().cpu().numpy()
+                    out_label_ids = inputs['labels'].detach().cpu().numpy()
+                else:
+                    preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
+                    out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
             pbar(step)
             
             if args.task_name == 'chid':
@@ -329,23 +355,43 @@ def evaluate(args, model, tokenizer, prefix=""):
                     logits_ = logits[i].detach().cpu().tolist()
                     eval_feature = eval_features[example_index.item()]
                     unique_id = int(eval_feature.unique_id)
-                    all_predictions.append(RawResult(unique_id=unique_id,
+                    all_predictions.append(ChidRawResult(unique_id=unique_id,
                                                  example_id=all_example_ids[unique_id],
                                                  tag=all_tags[unique_id],
                                                  logit=logits_))
+            elif args.task_name in ['cmrc2018']:
+                for i, example_index in enumerate(example_indices):
+                    start_logits = batch_start_logits[i].detach().cpu().tolist()
+                    end_logits = batch_end_logits[i].detach().cpu().tolist()
+                    eval_feature = eval_features[example_index.item()]
+                    unique_id = int(eval_feature['unique_id'])
+                    all_predictions.append(CmrcRawResult(unique_id=unique_id,
+                                                 start_logits=start_logits,
+                                                 end_logits=end_logits))
         print(' ')
         if 'cuda' in str(args.device):
             torch.cuda.empty_cache()
         eval_loss = eval_loss / nb_eval_steps
-        if args.task_name == 'chid':
-            preds = get_final_predictions(all_predictions, g=True)
-            #print ("preds:\n", preds)
-            preds = [p[1] for p in preds]
-        elif args.output_mode == "classification":
-            preds = np.argmax(preds, axis=1)
-        elif args.output_mode == "regression":
-            preds = np.squeeze(preds)
-        result = compute_metrics(eval_task, preds, out_label_ids)
+        if args.task_name == 'cmrc2018':
+            output_prediction_file = os.path.join(args.output_dir,
+                                          "predictions_steps" + str(global_step) + ".json")
+            output_nbest_file = output_prediction_file.replace('predictions', 'nbest')
+            write_cmrc2018_predictions(eval_examples, eval_features, all_predictions,
+                      n_best_size=args.n_best, max_answer_length=args.max_ans_length,
+                      do_lower_case=True, output_prediction_file=output_prediction_file,
+                      output_nbest_file=output_nbest_file)
+            dev_file = os.path.join(args.data_dir, 'dev.json')
+            result = compute_cmrc2018_metrics(dev_file, output_prediction_file)
+        else:
+            if args.task_name == 'chid':
+                preds = get_final_predictions(all_predictions, g=True)
+                #print ("preds:\n", preds)
+                preds = [p[1] for p in preds]
+            elif args.output_mode == "classification":
+                preds = np.argmax(preds, axis=1)
+            elif args.output_mode == "regression":
+                preds = np.squeeze(preds)
+            result = compute_metrics(eval_task, preds, out_label_ids)
         result['eval_loss'] = eval_loss
         results.update(result)
         logger.info("  Num examples = %d", len(eval_dataset))
@@ -362,8 +408,14 @@ def predict(args, model, tokenizer, label_list, prefix=""):
     label_map = {i: label for i, label in enumerate(label_list)}
 
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
-        pred_dataset, pred_features = example_loaders[args.task_name](args, pred_task, tokenizer, 
-                                                            data_type='test', return_features=True)
+        if args.output_mode == 'qa':
+            pred_dataset, pred_features, pred_examples = example_loaders[args.task_name](args, pred_task, 
+                                                            tokenizer, data_type='test', 
+                                                            return_features=True, return_examples=True)
+        else:
+            pred_dataset, pred_features = example_loaders[args.task_name](args, pred_task, 
+                                                            tokenizer, data_type='test', 
+                                                            return_features=True, return_examples=False)
         if not os.path.exists(pred_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(pred_output_dir)
 
@@ -389,27 +441,31 @@ def predict(args, model, tokenizer, label_list, prefix=""):
             #batch = tuple(t.to(args.device) for t in batch)
             with torch.no_grad():
                 inputs = _prepare_inputs(batch, args.device)
-                if args.task_name == 'chid':
+                if args.task_name in ['chid', 'cmrc2018', 'drcd']:
                     example_indices = inputs['example_indices']
                     del inputs['example_indices']
                     del inputs['labels']
 
                 outputs = model(**inputs)
-                if len(outputs) == 1:
+                if args.output_mode == 'qa':
+                    batch_start_logits, batch_end_logits = outputs
+                elif len(outputs) == 1:
                     logits = outputs[0]
                 else:
                     _, logits = outputs[:2]
             nb_pred_steps += 1
-            if preds is None:
-                if pred_task == 'copa':
-                    preds = logits.softmax(-1).detach().cpu().numpy()
+
+            if args.output_mode != 'qa':
+                if preds is None:
+                    if pred_task == 'copa':
+                        preds = logits.softmax(-1).detach().cpu().numpy()
+                    else:
+                        preds = logits.detach().cpu().numpy()
                 else:
-                    preds = logits.detach().cpu().numpy()
-            else:
-                if pred_task == 'copa':
-                    preds = np.append(preds, logits.softmax(-1).detach().cpu().numpy(), axis=0)
-                else:
-                    preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
+                    if pred_task == 'copa':
+                        preds = np.append(preds, logits.softmax(-1).detach().cpu().numpy(), axis=0)
+                    else:
+                        preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
             pbar(step)
 
             if args.task_name == 'chid':
@@ -417,45 +473,63 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                     logits_ = logits[i].detach().cpu().tolist()
                     pred_feature = pred_features[example_index.item()]
                     unique_id = int(pred_feature.unique_id)
-                    all_predictions.append(RawResult(unique_id=unique_id,
+                    all_predictions.append(ChidRawResult(unique_id=unique_id,
                                                  example_id=all_example_ids[unique_id],
                                                  tag=all_tags[unique_id],
                                                  logit=logits_))
+            elif args.task_name in ['cmrc2018']:
+                for i, example_index in enumerate(example_indices):
+                    start_logits = batch_start_logits[i].detach().cpu().tolist()
+                    end_logits = batch_end_logits[i].detach().cpu().tolist()
+                    eval_feature = eval_features[example_index.item()]
+                    unique_id = int(eval_feature['unique_id'])
+                    all_predictions.append(CmrcRawResult(unique_id=unique_id,
+                                                 start_logits=start_logits,
+                                                 end_logits=end_logits))
+
         print(' ')
-        if args.task_name == 'chid':
-            preds = get_final_predictions(all_predictions, g=True)
-            #print ("preds:\n", preds)
-        elif args.output_mode == "classification":
-            predict_label = np.argmax(preds, axis=1)
-        elif args.output_mode == "regression":
-            predict_label = np.squeeze(preds)
-        if pred_task == 'copa':
-            predict_label = []
-            pred_logits = preds[:, 1]
-            i = 0
-            while (i < len(pred_logits) - 1):
-                if pred_logits[i] >= pred_logits[i + 1]:
-                    predict_label.append(0)
-                else:
-                    predict_label.append(1)
-                i += 2
-        output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
-        output_logits_file = os.path.join(pred_output_dir, prefix, "test_logits")
-        # 保存标签结果
-        with open(output_submit_file, "w") as writer:
+        if args.task_name == 'cmrc2018':
+            output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
+            output_nbest_file = output_submit_file.replace('predictions', 'nbest')
+            write_cmrc2018_predictions(pred_examples, pred_features, all_predictions,
+                      n_best_size=args.n_best, max_answer_length=args.max_ans_length,
+                      do_lower_case=True, output_prediction_file=output_submit_file,
+                      output_nbest_file=output_nbest_file)
+        else:
             if args.task_name == 'chid':
-                json_d = {}
-                for tag, pred in preds:
-                    json_d[tag] = pred
-                json.dump(json_d, writer, indent=4)
-            else:
-                for i, pred in enumerate(predict_label):
+                preds = get_final_predictions(all_predictions, g=True)
+                #print ("preds:\n", preds)
+            elif args.output_mode == "classification":
+                predict_label = np.argmax(preds, axis=1)
+            elif args.output_mode == "regression":
+                predict_label = np.squeeze(preds)
+            if pred_task == 'copa':
+                predict_label = []
+                pred_logits = preds[:, 1]
+                i = 0
+                while (i < len(pred_logits) - 1):
+                    if pred_logits[i] >= pred_logits[i + 1]:
+                        predict_label.append(0)
+                    else:
+                        predict_label.append(1)
+                    i += 2
+            output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
+            output_logits_file = os.path.join(pred_output_dir, prefix, "test_logits")
+            # 保存标签结果
+            with open(output_submit_file, "w") as writer:
+                if args.task_name == 'chid':
                     json_d = {}
-                    json_d['id'] = i
-                    json_d['label'] = str(label_map[pred])
-                    writer.write(json.dumps(json_d) + '\n')
-        # 保存中间预测结果
-        save_numpy(file_path=output_logits_file, data=preds)
+                    for tag, pred in preds:
+                        json_d[tag] = pred
+                    json.dump(json_d, writer, indent=4)
+                else:
+                    for i, pred in enumerate(predict_label):
+                        json_d = {}
+                        json_d['id'] = i
+                        json_d['label'] = str(label_map[pred])
+                        writer.write(json.dumps(json_d) + '\n')
+            # 保存中间预测结果
+            save_numpy(file_path=output_logits_file, data=preds)
 
 
 def load_labels_from_json(path):
@@ -495,6 +569,11 @@ def main():
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
     parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
+
+    ## QA parameters
+    parser.add_argument('--decision_metric', type=str, default='em', choices=['em','f1','avg'], help="use which metric to chose QA model")
+    parser.add_argument('--max_ans_length', type=int, default=50)
+    parser.add_argument('--n_best', type=int, default=20)
 
     ## Other parameters
     parser.add_argument("--optim", default="AdamW", type=str, choices=["AdamW","BERTAdam"], help="Type of optimizer")
@@ -651,7 +730,7 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
-        train_dataset = example_loaders[args.task_name](args, args.task_name, tokenizer, data_type='train')
+        train_dataset = example_loaders[args.task_name](args, args.task_name, tokenizer, data_type='train')[0]
         global_step, tr_loss, best_checkpoint = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
         if best_checkpoint is not None:
