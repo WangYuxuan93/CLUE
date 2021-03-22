@@ -512,5 +512,5 @@ def load_and_cache_c3_examples(args, task, tokenizer, data_type='train',
 
     outputs = (dataset,)
     if return_features:
-        outputs += (features)
+        outputs += (features,)
     return outputs
