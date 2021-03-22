@@ -642,10 +642,13 @@ def load_and_cache_drcd_examples(args, task, tokenizer, data_type='train',
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
     else:
-        logger.info("Saving examples to file %s", cached_examples_file)
-        examples = read_drcd_examples(data_file, is_training=True if data_type in ['train','dev'] else False)
-
-        torch.save(examples, cached_examples_file)
+        if os.path.exists(cached_examples_file):
+            logger.info("Loading examples from cached file %s", cached_examples_file)
+            examples = torch.load(cached_examples_file)
+        else:
+            logger.info("Saving examples to file %s", cached_examples_file)
+            examples = read_drcd_examples(data_file, is_training=True if data_type in ['train','dev'] else False)
+            torch.save(examples, cached_examples_file)
 
         logger.info("Creating features from dataset file at %s", args.data_dir)
 
