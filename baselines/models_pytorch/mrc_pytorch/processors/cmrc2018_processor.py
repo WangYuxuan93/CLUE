@@ -805,21 +805,29 @@ def write_cmrc2018_predictions(all_examples, all_features, all_results, n_best_s
                     # that the start of the span is in the question. We throw out all
                     # invalid predictions.
                     if start_index >= len(feature['tokens']):
+                        #print ("### start_index >= len(feature['tokens'])")
                         continue
                     if end_index >= len(feature['tokens']):
+                        #print ("### end_index >= len(feature['tokens'])")
                         continue
                     if str(start_index) not in feature['token_to_orig_map'] and \
                             start_index not in feature['token_to_orig_map']:
+                        #print ("### start_index not in feature['token_to_orig_map']")
                         continue
                     if str(end_index) not in feature['token_to_orig_map'] and \
                             end_index not in feature['token_to_orig_map']:
+                        #print ("### end_index not in feature['token_to_orig_map']")
                         continue
-                    if not feature['token_is_max_context'].get(str(start_index), False):
+                    # remove str since we use torch,save, the index is int instead of str
+                    if not feature['token_is_max_context'].get(start_index, False):
+                        #print ("### not feature['token_is_max_context'].get(str(start_index), False)")
                         continue
                     if end_index < start_index:
+                        #print ("### end_index < start_index")
                         continue
                     length = end_index - start_index + 1
                     if length > max_answer_length:
+                        #print ("### length > max_answer_length")
                         continue
                     prelim_predictions.append(
                         _PrelimPrediction(
@@ -852,8 +860,8 @@ def write_cmrc2018_predictions(all_examples, all_features, all_results, n_best_s
             feature = features[pred.feature_index]
             if pred.start_index > 0:  # this is a non-null prediction
                 tok_tokens = feature['tokens'][pred.start_index:(pred.end_index + 1)]
-                orig_doc_start = feature['token_to_orig_map'][str(pred.start_index)]
-                orig_doc_end = feature['token_to_orig_map'][str(pred.end_index)]
+                orig_doc_start = feature['token_to_orig_map'][pred.start_index]
+                orig_doc_end = feature['token_to_orig_map'][pred.end_index]
                 orig_tokens = example['doc_tokens'][orig_doc_start:(orig_doc_end + 1)]
                 tok_text = "".join(tok_tokens)
 

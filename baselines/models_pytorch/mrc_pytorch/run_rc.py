@@ -77,6 +77,9 @@ def _prepare_inputs(inputs, device, use_dist=False, debug=False):
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(device)
 
+    #print ("start_positions:\n", inputs['start_positions'])
+    #print ("end_positions:\n", inputs['end_positions'])
+
     #if "first_indices" in inputs:
     #    del inputs["first_indices"]
     if "heads" in inputs and inputs["heads"] is not None:
@@ -365,6 +368,8 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
                                                  tag=all_tags[unique_id],
                                                  logit=logits_))
             elif args.task_name in ['cmrc2018','drcd']:
+                #print ("start_logits:\n", batch_start_logits)
+                #print ("end_logits:\n", batch_end_logits)
                 for i, example_index in enumerate(example_indices):
                     start_logits = batch_start_logits[i].detach().cpu().tolist()
                     end_logits = batch_end_logits[i].detach().cpu().tolist()
@@ -378,7 +383,10 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
             torch.cuda.empty_cache()
         eval_loss = eval_loss / nb_eval_steps
         if args.task_name == 'cmrc2018':
-            output_prediction_file = os.path.join(args.output_dir,
+            outpath = os.path.join(args.output_dir, 'tmp_prediction')
+            if not os.path.exists(outpath):
+                os.makedirs(outpath)
+            output_prediction_file = os.path.join(outpath,
                                           "predictions_steps" + str(global_step) + ".json")
             output_nbest_file = output_prediction_file.replace('predictions', 'nbest')
             write_cmrc2018_predictions(eval_examples, eval_features, all_predictions,
@@ -388,7 +396,10 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
             dev_file = os.path.join(args.data_dir, 'dev.json')
             result = compute_cmrc2018_metrics(dev_file, output_prediction_file)
         elif args.task_name == 'drcd':
-            output_prediction_file = os.path.join(args.output_dir,
+            outpath = os.path.join(args.output_dir, 'tmp_prediction')
+            if not os.path.exists(outpath):
+                os.makedirs(outpath)
+            output_prediction_file = os.path.join(outpath,
                                           "predictions_steps" + str(global_step) + ".json")
             output_nbest_file = output_prediction_file.replace('predictions', 'nbest')
             write_drcd_predictions(eval_examples, eval_features, all_predictions,
@@ -516,14 +527,14 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         print(' ')
         if args.task_name == 'cmrc2018':
             output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
-            output_nbest_file = output_submit_file.replace('predictions', 'nbest')
+            output_nbest_file = output_submit_file.replace('prediction', 'nbest')
             write_cmrc2018_predictions(pred_examples, pred_features, all_predictions,
                       n_best_size=args.n_best, max_answer_length=args.max_ans_length,
                       do_lower_case=True, output_prediction_file=output_submit_file,
                       output_nbest_file=output_nbest_file)
         elif args.task_name == 'drcd':
             output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
-            output_nbest_file = output_submit_file.replace('predictions', 'nbest')
+            output_nbest_file = output_submit_file.replace('prediction', 'nbest')
             write_drcd_predictions(pred_examples, pred_features, all_predictions,
                       n_best_size=args.n_best, max_answer_length=args.max_ans_length,
                       do_lower_case=True, output_prediction_file=output_submit_file,

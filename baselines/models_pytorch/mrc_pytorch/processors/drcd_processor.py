@@ -779,7 +779,7 @@ def write_drcd_predictions(all_examples, all_features, all_results, n_best_size,
                     if str(end_index) not in feature['token_to_orig_map'] and \
                             end_index not in feature['token_to_orig_map']:
                         continue
-                    if not feature['token_is_max_context'].get(str(start_index), False):
+                    if not feature['token_is_max_context'].get(start_index, False):
                         continue
                     if end_index < start_index:
                         continue
@@ -817,8 +817,8 @@ def write_drcd_predictions(all_examples, all_features, all_results, n_best_size,
             feature = features[pred.feature_index]
             if pred.start_index > 0:  # this is a non-null prediction
                 tok_tokens = feature['tokens'][pred.start_index:(pred.end_index + 1)]
-                orig_doc_start = feature['token_to_orig_map'][str(pred.start_index)]
-                orig_doc_end = feature['token_to_orig_map'][str(pred.end_index)]
+                orig_doc_start = feature['token_to_orig_map'][pred.start_index]
+                orig_doc_end = feature['token_to_orig_map'][pred.end_index]
                 orig_tokens = example['ori_doc_tokens'][orig_doc_start:(orig_doc_end + 1)]
                 tok_text = "".join(tok_tokens)
 
