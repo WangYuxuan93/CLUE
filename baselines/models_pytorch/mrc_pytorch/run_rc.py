@@ -12,6 +12,7 @@ import glob
 import logging
 import os
 import json
+import collections
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
@@ -30,7 +31,8 @@ from processors import collate_fns
 from processors import example_loaders
 from processors import label_lists
 from processors.chid_processor import ChidRawResult, get_final_predictions
-from processors.cmrc2018_processor import CmrcRawResult, write_cmrc2018_predictions, compute_cmrc2018_metrics
+from processors.cmrc2018_processor import write_cmrc2018_predictions, compute_cmrc2018_metrics
+from processors.drcd_processor import write_drcd_predictions, compute_drcd_metrics
 #from processors import load_and_cache_c3_examples as load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
@@ -210,7 +212,7 @@ def train(args, train_dataset, model, tokenizer):
             model.train()
             #batch = tuple(t.to(args.device) for t in batch)
             inputs = _prepare_inputs(batch, args.device)
-            if args.task_name in ['chid','cmrc2018'] and 'example_indices' in inputs:
+            if args.task_name in ['chid','cmrc2018','drcd'] and 'example_indices' in inputs:
                 del inputs['example_indices']
             #print ("batch:\n", batch)
 
@@ -296,6 +298,9 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
     eval_outputs_dirs = (args.output_dir,)
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
+        if eval_task in ['cmrc2018','drcd']:
+            RawResult = collections.namedtuple("RawResult",
+                               ["unique_id", "start_logits", "end_logits"])
         if args.output_mode == 'qa':
             eval_dataset, eval_features, eval_examples = example_loaders[args.task_name](args, eval_task, 
                                                             tokenizer, data_type='dev', 
@@ -359,13 +364,13 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
                                                  example_id=all_example_ids[unique_id],
                                                  tag=all_tags[unique_id],
                                                  logit=logits_))
-            elif args.task_name in ['cmrc2018']:
+            elif args.task_name in ['cmrc2018','drcd']:
                 for i, example_index in enumerate(example_indices):
                     start_logits = batch_start_logits[i].detach().cpu().tolist()
                     end_logits = batch_end_logits[i].detach().cpu().tolist()
                     eval_feature = eval_features[example_index.item()]
                     unique_id = int(eval_feature['unique_id'])
-                    all_predictions.append(CmrcRawResult(unique_id=unique_id,
+                    all_predictions.append(RawResult(unique_id=unique_id,
                                                  start_logits=start_logits,
                                                  end_logits=end_logits))
         print(' ')
@@ -382,6 +387,16 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
                       output_nbest_file=output_nbest_file)
             dev_file = os.path.join(args.data_dir, 'dev.json')
             result = compute_cmrc2018_metrics(dev_file, output_prediction_file)
+        elif args.task_name == 'drcd':
+            output_prediction_file = os.path.join(args.output_dir,
+                                          "predictions_steps" + str(global_step) + ".json")
+            output_nbest_file = output_prediction_file.replace('predictions', 'nbest')
+            write_drcd_predictions(eval_examples, eval_features, all_predictions,
+                      n_best_size=args.n_best, max_answer_length=args.max_ans_length,
+                      do_lower_case=True, output_prediction_file=output_prediction_file,
+                      output_nbest_file=output_nbest_file)
+            dev_file = os.path.join(args.data_dir, 'dev.json')
+            result = compute_drcd_metrics(dev_file, output_prediction_file)
         else:
             if args.task_name == 'chid':
                 preds = get_final_predictions(all_predictions, g=True)
@@ -403,9 +418,14 @@ def evaluate(args, model, tokenizer, prefix="", global_step=0):
 
 
 def predict(args, model, tokenizer, label_list, prefix=""):
+    if args.task_name in ['cmrc2018','drcd']:
+        RawResult = collections.namedtuple("RawResult",
+                               ["unique_id", "start_logits", "end_logits"])
     pred_task_names = (args.task_name,)
     pred_outputs_dirs = (args.output_dir,)
     label_map = {i: label for i, label in enumerate(label_list)}
+
+    print ("task:", args.task_name)
 
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
         if args.output_mode == 'qa':
@@ -443,8 +463,14 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                 inputs = _prepare_inputs(batch, args.device)
                 if args.task_name in ['chid', 'cmrc2018', 'drcd']:
                     example_indices = inputs['example_indices']
-                    del inputs['example_indices']
-                    del inputs['labels']
+                    if 'example_indices' in inputs:
+                        del inputs['example_indices']
+                    if 'labels' in inputs:
+                        del inputs['labels']
+                    if 'start_positions' in inputs:
+                        del inputs['start_positions']
+                    if 'end_positions' in inputs:
+                        del inputs['end_positions']
 
                 outputs = model(**inputs)
                 if args.output_mode == 'qa':
@@ -477,13 +503,13 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                                                  example_id=all_example_ids[unique_id],
                                                  tag=all_tags[unique_id],
                                                  logit=logits_))
-            elif args.task_name in ['cmrc2018']:
+            elif args.task_name in ['cmrc2018','drcd']:
                 for i, example_index in enumerate(example_indices):
                     start_logits = batch_start_logits[i].detach().cpu().tolist()
                     end_logits = batch_end_logits[i].detach().cpu().tolist()
-                    eval_feature = eval_features[example_index.item()]
-                    unique_id = int(eval_feature['unique_id'])
-                    all_predictions.append(CmrcRawResult(unique_id=unique_id,
+                    pred_feature = pred_features[example_index.item()]
+                    unique_id = int(pred_feature['unique_id'])
+                    all_predictions.append(RawResult(unique_id=unique_id,
                                                  start_logits=start_logits,
                                                  end_logits=end_logits))
 
@@ -492,6 +518,13 @@ def predict(args, model, tokenizer, label_list, prefix=""):
             output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
             output_nbest_file = output_submit_file.replace('predictions', 'nbest')
             write_cmrc2018_predictions(pred_examples, pred_features, all_predictions,
+                      n_best_size=args.n_best, max_answer_length=args.max_ans_length,
+                      do_lower_case=True, output_prediction_file=output_submit_file,
+                      output_nbest_file=output_nbest_file)
+        elif args.task_name == 'drcd':
+            output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.json")
+            output_nbest_file = output_submit_file.replace('predictions', 'nbest')
+            write_drcd_predictions(pred_examples, pred_features, all_predictions,
                       n_best_size=args.n_best, max_answer_length=args.max_ans_length,
                       do_lower_case=True, output_prediction_file=output_submit_file,
                       output_nbest_file=output_nbest_file)

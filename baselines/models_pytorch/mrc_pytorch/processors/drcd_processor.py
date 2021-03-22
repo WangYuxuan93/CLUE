@@ -1,4 +1,5 @@
 import collections
+import copy
 import json
 import os
 import torch
@@ -10,7 +11,7 @@ from neuronlp2.sdp_parser import SDPParser
 from .utils import get_final_text, _get_best_indexes, _compute_softmax, calc_f1_score, calc_em_score
 from collections import OrderedDict
 
-from tools import official_tokenization as tokenization
+from tools.langconv import Converter
 
 import logging
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -18,13 +19,9 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CmrcRawResult = collections.namedtuple("CmrcRawResult",
-                                    ["unique_id", "start_logits", "end_logits"])
-
 SPIECE_UNDERLINE = '▁'
 
-
-def cmrc2018_collate_fn(batch):
+def drcd_collate_fn(batch):
     """
     batch should be a list of (sequence, target, length) tuples...
     Returns a padded tensor of sequences sorted from longest to shortest,
@@ -50,6 +47,15 @@ def cmrc2018_collate_fn(batch):
     batch["rels"] = all_rels
     batch["dists"] = all_dists
     return batch
+
+
+def whitespace_tokenize(text):
+    """Runs basic whitespace cleaning and splitting on a peice of text."""
+    text = text.strip()
+    if not text:
+        return []
+    tokens = text.split()
+    return tokens
 
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
@@ -126,7 +132,17 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
     return cur_span_index == best_span_index
 
 
-def read_cmrc2018_examples(input_data_file, repeat_limit=3, is_training=True):
+def Traditional2Simplified(sentence):
+    '''
+    将sentence中的繁体字转为简体字
+    :param sentence: 待转换的句子
+    :return: 将句子中繁体字转换为简体字之后的句子
+    '''
+    sentence = Converter('zh-hans').convert(sentence)
+    return sentence
+
+
+def read_drcd_examples(input_data_file, is_training=True):
     with open(input_data_file, 'r') as f:
         train_data = json.load(f)
         train_data = train_data['data']
@@ -148,7 +164,7 @@ def read_cmrc2018_examples(input_data_file, repeat_limit=3, is_training=True):
         if c == '。' or c == '，' or c == '！' or c == '？' or c == '；' or c == '、' or c == '：' or c == '（' or c == '）' \
                 or c == '－' or c == '~' or c == '「' or c == '《' or c == '》' or c == ',' or c == '」' or c == '"' or c == '“' or c == '”' \
                 or c == '$' or c == '『' or c == '』' or c == '—' or c == ';' or c == '。' or c == '(' or c == ')' or c == '-' or c == '～' or c == '。' \
-                or c == '‘' or c == '’':
+                or c == '‘' or c == '’' or c == '─' or c == ':':
             return True
         return False
 
@@ -176,39 +192,43 @@ def read_cmrc2018_examples(input_data_file, repeat_limit=3, is_training=True):
     mis_match = 0
     for article in tqdm(train_data):
         for para in article['paragraphs']:
-            context = para['context']
+            context = copy.deepcopy(para['context'])
+            # 转简体
+            context = Traditional2Simplified(context)
+            # context中的中文前后加入空格
             context_chs = _tokenize_chinese_chars(context)
+            context_fhs = _tokenize_chinese_chars(para['context'])
+
             doc_tokens = []
+            ori_doc_tokens = []
             char_to_word_offset = []
             prev_is_whitespace = True
-            for c in context_chs:
+
+            for ic, c in enumerate(context_chs):
                 if is_whitespace(c):
                     prev_is_whitespace = True
                 else:
                     if prev_is_whitespace:
                         doc_tokens.append(c)
+                        ori_doc_tokens.append(context_fhs[ic])
                     else:
                         doc_tokens[-1] += c
+                        ori_doc_tokens[-1] += context_fhs[ic]
                     prev_is_whitespace = False
                 if c != SPIECE_UNDERLINE:
                     char_to_word_offset.append(len(doc_tokens) - 1)
 
+            assert len(context_chs) == len(context_fhs)
             for qas in para['qas']:
                 qid = qas['id']
-                ques_text = qas['question']
-                ans_text = qas['answers'][0]['text']
-
+                ques_text = Traditional2Simplified(qas['question'])
+                ans_text = Traditional2Simplified(qas['answers'][0]['text'])
                 start_position_final = None
                 end_position_final = None
-                if is_training:
-                    count_i = 0
-                    start_position = qas['answers'][0]['answer_start']
 
+                if is_training:
+                    start_position = qas['answers'][0]['answer_start']
                     end_position = start_position + len(ans_text) - 1
-                    while context[start_position:end_position + 1] != ans_text and count_i < repeat_limit:
-                        start_position -= 1
-                        end_position -= 1
-                        count_i += 1
 
                     while context[start_position] == " " or context[start_position] == "\t" or \
                             context[start_position] == "\r" or context[start_position] == "\n":
@@ -219,16 +239,15 @@ def read_cmrc2018_examples(input_data_file, repeat_limit=3, is_training=True):
 
                     if doc_tokens[start_position_final] in {"。", "，", "：", ":", ".", ","}:
                         start_position_final += 1
-
                     actual_text = "".join(doc_tokens[start_position_final:(end_position_final + 1)])
-                    cleaned_answer_text = "".join(tokenization.whitespace_tokenize(ans_text))
+                    cleaned_answer_text = "".join(whitespace_tokenize(ans_text))
 
                     if actual_text != cleaned_answer_text:
                         print(actual_text, 'V.S', cleaned_answer_text)
                         mis_match += 1
-                        # ipdb.set_trace()
 
                 examples.append({'doc_tokens': doc_tokens,
+                                 'ori_doc_tokens': ori_doc_tokens,
                                  'orig_answer_text': ans_text,
                                  'qid': qid,
                                  'question': ques_text,
@@ -237,7 +256,7 @@ def read_cmrc2018_examples(input_data_file, repeat_limit=3, is_training=True):
                                  'end_position': end_position_final})
 
     print('examples num:', len(examples))
-    print('mis_match:', mis_match)
+    print('mis match:', mis_match)
     #os.makedirs('/'.join(output_files[0].split('/')[0:-1]), exist_ok=True)
     #json.dump(examples, open(output_files[0], 'w'))
 
@@ -359,19 +378,6 @@ def convert_examples_to_features(
                         start_position = tok_start_position - doc_start + doc_offset
                         end_position = tok_end_position - doc_start + doc_offset
 
-            if unique_id < 1000000005:
-                torch.set_printoptions(profile="full")
-                print("*** Example ***")
-                print("unique_id: {}".format(unique_id))
-                print("example_index: {}".format(example_index))
-                print("doc_span_index: {}".format(doc_span_index))
-                print("tokens: {}".format("".join(tokens)))
-                print("token_to_orig_map: {}".format(token_to_orig_map))
-                print("token_is_max_context: {}".format(token_is_max_context))
-                print("input_ids:\n", input_ids)
-                print("start_position:\n", start_position)
-                print("end_position:\n", end_position)
-
             features.append({'unique_id': unique_id,
                              'example_index': example_index,
                              'doc_span_index': doc_span_index,
@@ -387,7 +393,6 @@ def convert_examples_to_features(
 
     #print('features num:', len(features))
     #json.dump(features, open(output_files[1], 'w'))
-
     return features
 
 
@@ -604,47 +609,8 @@ def convert_parsed_examples_to_features(
     return features
 
 
-def _convert_index(index, pos, M=None, is_start=True):
-    if pos >= len(index):
-        pos = len(index) - 1
-    if index[pos] is not None:
-        return index[pos]
-    N = len(index)
-    rear = pos
-    while rear < N - 1 and index[rear] is None:
-        rear += 1
-    front = pos
-    while front > 0 and index[front] is None:
-        front -= 1
-    assert index[front] is not None or index[rear] is not None
-    if index[front] is None:
-        if index[rear] >= 1:
-            if is_start:
-                return 0
-            else:
-                return index[rear] - 1
-        return index[rear]
-    if index[rear] is None:
-        if M is not None and index[front] < M - 1:
-            if is_start:
-                return index[front] + 1
-            else:
-                return M - 1
-        return index[front]
-    if is_start:
-        if index[rear] > index[front] + 1:
-            return index[front] + 1
-        else:
-            return index[rear]
-    else:
-        if index[rear] > index[front] + 1:
-            return index[rear] - 1
-        else:
-            return index[front]
-
-
-def load_and_cache_cmrc2018_examples(args, task, tokenizer, data_type='train', 
-                                     return_examples=False, return_features=False):
+def load_and_cache_drcd_examples(args, task, tokenizer, data_type='train', 
+                                 return_examples=False, return_features=False):
     cached_examples_file = os.path.join(args.data_dir, 'cached_examples_{}_{}'.format(
             data_type,
             str(task)))
@@ -677,7 +643,7 @@ def load_and_cache_cmrc2018_examples(args, task, tokenizer, data_type='train',
         features = torch.load(cached_features_file)
     else:
         logger.info("Saving examples to file %s", cached_examples_file)
-        examples = read_cmrc2018_examples(data_file, is_training=True if data_type in ['train','dev'] else False)
+        examples = read_drcd_examples(data_file, is_training=True if data_type in ['train','dev'] else False)
 
         torch.save(examples, cached_examples_file)
 
@@ -754,9 +720,8 @@ def load_and_cache_cmrc2018_examples(args, task, tokenizer, data_type='train',
         outputs += (examples,)
     return outputs
 
-## output
 
-def write_cmrc2018_predictions(all_examples, all_features, all_results, n_best_size,
+def write_drcd_predictions(all_examples, all_features, all_results, n_best_size,
                       max_answer_length, do_lower_case, output_prediction_file,
                       output_nbest_file, version_2_with_negative=False, null_score_diff_threshold=0.):
     """Write final predictions to the json file and log-odds of null if needed."""
@@ -854,7 +819,7 @@ def write_cmrc2018_predictions(all_examples, all_features, all_results, n_best_s
                 tok_tokens = feature['tokens'][pred.start_index:(pred.end_index + 1)]
                 orig_doc_start = feature['token_to_orig_map'][str(pred.start_index)]
                 orig_doc_end = feature['token_to_orig_map'][str(pred.end_index)]
-                orig_tokens = example['doc_tokens'][orig_doc_start:(orig_doc_end + 1)]
+                orig_tokens = example['ori_doc_tokens'][orig_doc_start:(orig_doc_end + 1)]
                 tok_text = "".join(tok_tokens)
 
                 # De-tokenize WordPieces that have been split off.
@@ -942,7 +907,7 @@ def write_cmrc2018_predictions(all_examples, all_features, all_results, n_best_s
         writer.write(json.dumps(all_nbest_json, indent=4, ensure_ascii=False) + "\n")
 
 
-def compute_cmrc2018_metrics(original_file, prediction_file):
+def compute_drcd_metrics(original_file, prediction_file):
     ground_truth_file = json.load(open(original_file, 'r'))
     prediction_file = json.load(open(prediction_file, 'r'))
     f1 = 0

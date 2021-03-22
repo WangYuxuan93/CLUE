@@ -4,7 +4,7 @@
 # @Last Modified by:   bo.shi
 # @Last Modified time: 2020-01-01 11:46:07
 
-TASK_NAME="cmrc2018"
+TASK_NAME="drcd"
 MODEL_NAME="bert-base-chinese"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
@@ -34,13 +34,14 @@ if [ $# == 0 ]; then
       --parser_return_tensor \
       --do_train \
       --do_eval \
+      --do_predict \
       --do_lower_case \
       --data_dir=$GLUE_DATA_DIR/${TASK_NAME}/ \
-      --max_seq_length=128 \
+      --max_seq_length=64 \
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=16 \
       --learning_rate=2e-5 \
-      --num_train_epochs=3.0 \
+      --num_train_epochs=2.0 \
       --max_steps=0 \
       --logging_steps=10 \
       --save_steps=10 \
