@@ -409,6 +409,20 @@ def convert_parsed_examples_to_features(
         return_tensor=True,
         compute_dist=False
     ):
+
+    # data collector
+    unique_id_list = []
+    example_index_list = []
+    doc_span_index_list = []
+    tokens_list = []
+    token_to_orig_map_list = []
+    token_is_max_context_list = []
+    input_ids_list = []
+    attention_mask_list = []
+    token_type_ids_list = []
+    start_position_list = []
+    end_position_list = []
+
     # to features
     features = []
     unique_id = 1000000000
@@ -453,18 +467,6 @@ def convert_parsed_examples_to_features(
             if start_offset + length == len(all_doc_tokens):
                 break
             start_offset += min(length, doc_stride)
-
-        # data collector
-        unique_id_list = []
-        doc_span_index_list = []
-        tokens_list = []
-        token_to_orig_map_list = []
-        token_is_max_context_list = []
-        input_ids_list = []
-        attention_mask_list = []
-        token_type_ids_list = []
-        start_position_list = []
-        end_position_list = []
 
         for (doc_span_index, doc_span) in enumerate(doc_spans):
             tokens = []
@@ -529,6 +531,7 @@ def convert_parsed_examples_to_features(
                         end_position = tok_end_position - doc_start + doc_offset
 
             unique_id_list.append(unique_id)
+            example_index_list.append(example_index)
             doc_span_index_list.append(doc_span_index)
             tokens_list.append(tokens)
             token_to_orig_map_list.append(token_to_orig_map)
@@ -541,66 +544,66 @@ def convert_parsed_examples_to_features(
 
             unique_id += 1
 
-        heads, rels = parser.parse_bpes(
-            input_ids_list,
-            attention_mask_list,
-            has_b=True,
-            expand_type=expand_type,
-            max_length=max_seq_length, 
-            align_type=align_type, 
-            return_tensor=return_tensor, 
-            sep_token_id=tokenizer.sep_token_id)
 
-        dists = None
+    heads, rels = parser.parse_bpes(
+        input_ids_list,
+        attention_mask_list,
+        has_b=True,
+        expand_type=expand_type,
+        max_length=max_seq_length, 
+        align_type=align_type, 
+        return_tensor=return_tensor, 
+        sep_token_id=tokenizer.sep_token_id)
+
+    dists = None
+    if compute_dist:
+        dists = compute_distance(heads, attention_mask_list)
+
+    for i in range(len(unique_id_list)):
+        if unique_id_list[i] < 1000000005:
+            torch.set_printoptions(profile="full")
+            print("*** Example ***")
+            print("unique_id: {}".format(unique_id_list[i]))
+            print("example_index: {}".format(example_index_list[i]))
+            print("doc_span_index: {}".format(doc_span_index_list[i]))
+            print("tokens: {}".format("".join(tokens_list[i])))
+            print("token_to_orig_map: {}".format(token_to_orig_map_list[i]))
+            print("token_is_max_context: {}".format(token_is_max_context_list[i]))
+            print("input_ids:\n", input_ids_list[i])
+            print("start_position:\n", start_position_list[i])
+            print("end_position:\n", end_position_list[i])
+            print("heads:\n", heads[i])
+            print("rels:\n", rels[i])
+
         if compute_dist:
-            dists = compute_distance(heads, attention_mask_list)
-
-        for (i, doc_span) in enumerate(doc_spans):
-            doc_span_index = i
-            if unique_id_list[i] < 1000000005:
-                torch.set_printoptions(profile="full")
-                print("*** Example ***")
-                print("unique_id: {}".format(unique_id_list[i]))
-                print("example_index: {}".format(example_index))
-                print("doc_span_index: {}".format(doc_span_index))
-                print("tokens: {}".format("".join(tokens_list[i])))
-                print("token_to_orig_map: {}".format(token_to_orig_map_list[i]))
-                print("token_is_max_context: {}".format(token_is_max_context_list[i]))
-                print("input_ids:\n", input_ids_list[i])
-                print("start_position:\n", start_position_list[i])
-                print("end_position:\n", end_position_list[i])
-                print("heads:\n", heads[i])
-                print("rels:\n", rels[i])
-
-            if compute_dist:
-                features.append({'unique_id': unique_id_list[i],
-                                 'example_index': example_index,
-                                 'doc_span_index': doc_span_index,
-                                 'tokens': tokens_list[i],
-                                 'token_to_orig_map': token_to_orig_map_list[i],
-                                 'token_is_max_context': token_is_max_context_list[i],
-                                 'input_ids': input_ids_list[i],
-                                 'attention_mask': attention_mask_list[i],
-                                 'token_type_ids': token_type_ids_list[i],
-                                 'start_position': start_position_list[i],
-                                 'end_position': end_position_list[i],
-                                 'heads': heads[i].to_sparse(),
-                                 'rels': rels[i].to_sparse(),
-                                 'dists': dists[i].to_sparse()})
-            else:
-                features.append({'unique_id': unique_id_list[i],
-                                 'example_index': example_index,
-                                 'doc_span_index': doc_span_index,
-                                 'tokens': tokens_list[i],
-                                 'token_to_orig_map': token_to_orig_map_list[i],
-                                 'token_is_max_context': token_is_max_context_list[i],
-                                 'input_ids': input_ids_list[i],
-                                 'attention_mask': attention_mask_list[i],
-                                 'token_type_ids': token_type_ids_list[i],
-                                 'start_position': start_position_list[i],
-                                 'end_position': end_position_list[i],
-                                 'heads': heads[i].to_sparse(),
-                                 'rels': rels[i].to_sparse()})
+            features.append({'unique_id': unique_id_list[i],
+                             'example_index': example_index_list[i],
+                             'doc_span_index': doc_span_index_list[i],
+                             'tokens': tokens_list[i],
+                             'token_to_orig_map': token_to_orig_map_list[i],
+                             'token_is_max_context': token_is_max_context_list[i],
+                             'input_ids': input_ids_list[i],
+                             'attention_mask': attention_mask_list[i],
+                             'token_type_ids': token_type_ids_list[i],
+                             'start_position': start_position_list[i],
+                             'end_position': end_position_list[i],
+                             'heads': heads[i].to_sparse(),
+                             'rels': rels[i].to_sparse(),
+                             'dists': dists[i].to_sparse()})
+        else:
+            features.append({'unique_id': unique_id_list[i],
+                             'example_index': example_index_list[i],
+                             'doc_span_index': doc_span_index_list[i],
+                             'tokens': tokens_list[i],
+                             'token_to_orig_map': token_to_orig_map_list[i],
+                             'token_is_max_context': token_is_max_context_list[i],
+                             'input_ids': input_ids_list[i],
+                             'attention_mask': attention_mask_list[i],
+                             'token_type_ids': token_type_ids_list[i],
+                             'start_position': start_position_list[i],
+                             'end_position': end_position_list[i],
+                             'heads': heads[i].to_sparse(),
+                             'rels': rels[i].to_sparse()})
             
 
     #print('features num:', len(features))
@@ -767,27 +770,36 @@ def write_drcd_predictions(all_examples, all_features, all_results, n_best_size,
                     min_null_feature_index = feature_index
                     null_start_logit = result.start_logits[0]
                     null_end_logit = result.end_logits[0]
+            #print ("feature:\n", feature)
+            #print ("start_index:", start_indexes)
+            #print ("end_index:", end_indexes)
             for start_index in start_indexes:
                 for end_index in end_indexes:
                     # We could hypothetically create invalid predictions, e.g., predict
                     # that the start of the span is in the question. We throw out all
                     # invalid predictions.
+                    #print ("### checking {}-{}".format(start_index, end_index))
                     if start_index >= len(feature['tokens']):
                         continue
                     if end_index >= len(feature['tokens']):
                         continue
                     if str(start_index) not in feature['token_to_orig_map'] and \
                             start_index not in feature['token_to_orig_map']:
+                        #print ("### start_index not in feature['token_to_orig_map']")
                         continue
                     if str(end_index) not in feature['token_to_orig_map'] and \
                             end_index not in feature['token_to_orig_map']:
+                        #print ("### end_index not in feature['token_to_orig_map']")
                         continue
                     if not feature['token_is_max_context'].get(start_index, False):
+                        #print ("### not feature['token_is_max_context'].get(str(start_index), False)")
                         continue
                     if end_index < start_index:
+                        #print ("### end_index < start_index")
                         continue
                     length = end_index - start_index + 1
                     if length > max_answer_length:
+                        #print ("### length > max_answer_length")
                         continue
                     prelim_predictions.append(
                         _PrelimPrediction(
@@ -796,6 +808,7 @@ def write_drcd_predictions(all_examples, all_features, all_results, n_best_size,
                             end_index=end_index,
                             start_logit=result.start_logits[start_index],
                             end_logit=result.end_logits[end_index]))
+            #print ("prelim_predictions:", prelim_predictions)
         if version_2_with_negative:
             prelim_predictions.append(
                 _PrelimPrediction(
