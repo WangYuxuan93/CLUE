@@ -488,33 +488,6 @@ def convert_parsed_examples_to_features(
             attention_mask.append(input_mask)
             token_type_ids.append(segment_id)
 
-        heads, rels = parser.parse_bpes(
-            input_ids,
-            attention_mask,
-            has_b=True,
-            expand_type=expand_type,
-            max_length=max_seq_length, 
-            align_type=align_type, 
-            return_tensor=return_tensor, 
-            sep_token_id=tokenizer.sep_token_id)
-
-        dists = None
-        if compute_dist:
-            dists = compute_distance(heads, attention_mask_list)
-
-        if unique_id < 5:
-            torch.set_printoptions(profile="full")
-            print("*** Example ***")
-            print("unique_id: {}".format(unique_id))
-            print("context_id: {}".format(tag))
-            print("label: {}".format(label))
-            print("tag_index: {}".format(pos))
-            print("tokens: {}".format("".join(tokens)))
-            print("choice_masks: {}".format(choice_masks))
-            print("input_ids:\n", input_ids)
-            print("heads:\n", heads)
-            print("rels:\n", rels)
-
         while len(input_ids) < max_num_choices:
             input_ids.append([0] * max_seq_length)
             attention_mask.append([0] * max_seq_length)
@@ -526,35 +499,26 @@ def convert_parsed_examples_to_features(
         assert len(token_type_ids) == max_num_choices
         assert len(choice_masks) == max_num_choices
 
-        if compute_dist:
-            features.append(
-                InputParsedFeatures(
-                    unique_id=unique_id,
-                    example_id=example.example_id,
-                    tag=tag,
-                    tokens=tokens,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    token_type_ids=token_type_ids,
-                    choice_masks=choice_masks,
-                    label=label,
-                    heads=heads.to_sparse(),
-                    rels=rels.to_sparse(),
-                    dists=dists.to_sparse()))
-        else:
-            features.append(
-                InputParsedFeatures(
-                    unique_id=unique_id,
-                    example_id=example.example_id,
-                    tag=tag,
-                    tokens=tokens,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    token_type_ids=token_type_ids,
-                    choice_masks=choice_masks,
-                    label=label,
-                    heads=heads.to_sparse(),
-                    rels=rels.to_sparse()))
+        unique_id_list.append(unique_id)
+        example_id_list.append(example.example_id)
+        tag_list.append(tag)
+        tokens_list.append(tokens)
+        input_ids_list.append(input_ids)
+        attention_mask_list.append(attention_mask)
+        token_type_ids_list.append(token_type_ids)
+        choice_masks_list.append(choice_masks)
+        label_list.append(label)
+
+    # data collector
+    unique_id_list = []
+    example_id_list = []
+    tag_list = []
+    tokens_list = []
+    input_ids_list = []
+    attention_mask_list = []
+    token_type_ids_list = []
+    choice_masks_list = []
+    label_list = []
 
     max_tokens_for_doc = max_seq_length - 3  # [CLS] choice [SEP] document [SEP]
     features = []
@@ -572,6 +536,75 @@ def convert_parsed_examples_to_features(
         if unique_id % 12000 == 0:
             print("unique_id: %s" % (unique_id))
     print("unique_id: %s" % (unique_id))
+    # (num_examples*max_num_choices, max_seq_len)
+    flat_input_ids_list = [input_id for input_ids in input_ids_list for input_id in input_ids]
+    flat_attention_mask_list = [input_mask for attention_mask in attention_mask_list for input_mask in attention_mask]
+    # (num_examples*max_num_choices, seq_len, seq_len)
+    flat_heads, flat_rels = parser.parse_bpes(
+            flat_input_ids_list,
+            flat_attention_mask_list,
+            has_b=True,
+            expand_type=expand_type,
+            max_length=max_seq_length, 
+            align_type=align_type, 
+            return_tensor=return_tensor, 
+            sep_token_id=tokenizer.sep_token_id)
+
+    heads = flat_heads.split(max_num_choices, dim=0)
+    rels = flat_rels.split(max_num_choices, dim=0)
+    assert len(heads) == len(unique_id_list)
+    assert len(rels) == len(unique_id_list)
+
+    dists = None
+    if compute_dist:
+        flat_dists = compute_distance(flat_heads, attention_mask_list)
+        dists = flat_dists.split(max_num_choices, dim=0)
+        assert len(dists) == len(unique_id_list)
+
+    for i in range(len(unique_id_list)):
+        if unique_id_list[i] < 5:
+            torch.set_printoptions(profile="full")
+            print("*** Example ***")
+            print("unique_id: {}".format(unique_id_list[i]))
+            print("context_id: {}".format(tag_list[i]))
+            print("label: {}".format(label_list[i]))
+            print("tag: {}".format(tag_list[i]))
+            print("tokens: {}".format("".join(tokens_list[i])))
+            print("choice_masks: {}".format(choice_masks_list[i]))
+            print("input_ids:\n", input_ids_list[i])
+            print("heads:\n", heads[i])
+            print("rels:\n", rels[i])
+
+        if compute_dist:
+            features.append(
+                InputParsedFeatures(
+                    unique_id=unique_id_list[i],
+                    example_id=example_id_list[i],
+                    tag=tag_list[i],
+                    tokens=tokens_list[i],
+                    input_ids=input_ids_list[i],
+                    attention_mask=attention_mask_list[i],
+                    token_type_ids=token_type_ids_list[i],
+                    choice_masks=choice_masks_list[i],
+                    label=label_list[i],
+                    heads=heads[i].to_sparse(),
+                    rels=rels[i].to_sparse(),
+                    dists=dists[i].to_sparse()))
+        else:
+            features.append(
+                InputParsedFeatures(
+                    unique_id=unique_id_list[i],
+                    example_id=example_id_list[i],
+                    tag=tag_list[i],
+                    tokens=tokens_list[i],
+                    input_ids=input_ids_list[i],
+                    attention_mask=attention_mask_list[i],
+                    token_type_ids=token_type_ids_list[i],
+                    choice_masks=choice_masks_list[i],
+                    label=label_list[i],
+                    heads=heads[i].to_sparse(),
+                    rels=rels[i].to_sparse()))
+
     return features
 
 
@@ -774,3 +807,177 @@ def evaluate(ans_f, pre_f):
     acc = acc_num / total_num
     acc *= 100
     return acc
+
+
+"""
+def convert_parsed_examples_to_features(
+        examples, 
+        tokenizer, 
+        parser,
+        max_seq_length=128, 
+        max_num_choices=10,
+        expand_type="word",
+        align_type="nltk",
+        return_tensor=True,
+        compute_dist=False
+    ):
+    '''
+    将所有候选答案放置在片段开头
+    '''
+
+    def _loop(example, unique_id, label):
+        '''
+        :param example:
+        :param unique_id:
+        :return:
+            input_ids = (C, seq_len)
+            token_type_ids = (C, seq_len) = segment_id
+            input_mask = (C, seq_len)
+            labels = int
+            choices_mask = (C)
+        '''
+        input_ids = []
+        attention_mask = []
+        token_type_ids = []
+        choice_masks = [1] * len(example.options)
+
+        tag = example.tag
+        all_doc_tokens = []
+        for (i, token) in enumerate(example.doc_tokens):
+            if '#idiom' in token:
+                sub_tokens = [str(token)]
+            else:
+                sub_tokens = tokenizer.tokenize(token)
+            for sub_token in sub_tokens:
+                all_doc_tokens.append(sub_token)
+
+        pos = all_doc_tokens.index(tag)
+        num_tokens = max_tokens_for_doc - 5  # [unused1]和segA的成语
+        tmp_l, tmp_r = add_tokens_for_around(all_doc_tokens, pos, num_tokens)
+        num_l = len(tmp_l)
+        num_r = len(tmp_r)
+
+        tokens_l = []
+        for token in tmp_l:
+            if '#idiom' in token and token != tag:
+                tokens_l.extend(['[MASK]'] * 4)
+            else:
+                tokens_l.append(token)
+        tokens_l = tokens_l[-num_l:]
+        del tmp_l
+
+        tokens_r = []
+        for token in tmp_r:
+            if '#idiom' in token and token != tag:
+                tokens_r.extend(['[MASK]'] * 4)
+            else:
+                tokens_r.append(token)
+        tokens_r = tokens_r[: num_r]
+        del tmp_r
+
+        for i, elem in enumerate(example.options):
+            option = tokenizer.tokenize(elem)
+            tokens = ['[CLS]'] + option + ['[SEP]'] + tokens_l + ['[unused1]'] + tokens_r + ['[SEP]']
+
+            input_id = tokenizer.convert_tokens_to_ids(tokens)
+            input_mask = [1] * len(input_id)
+            segment_id = [0] * len(input_id)
+
+            while len(input_id) < max_seq_length:
+                input_id.append(0)
+                input_mask.append(0)
+                segment_id.append(0)
+            assert len(input_id) == max_seq_length
+            assert len(input_mask) == max_seq_length
+            assert len(segment_id) == max_seq_length
+
+            input_ids.append(input_id)
+            attention_mask.append(input_mask)
+            token_type_ids.append(segment_id)
+
+        heads, rels = parser.parse_bpes(
+            input_ids,
+            attention_mask,
+            has_b=True,
+            expand_type=expand_type,
+            max_length=max_seq_length, 
+            align_type=align_type, 
+            return_tensor=return_tensor, 
+            sep_token_id=tokenizer.sep_token_id)
+
+        dists = None
+        if compute_dist:
+            dists = compute_distance(heads, attention_mask_list)
+
+        if unique_id < 5:
+            torch.set_printoptions(profile="full")
+            print("*** Example ***")
+            print("unique_id: {}".format(unique_id))
+            print("context_id: {}".format(tag))
+            print("label: {}".format(label))
+            print("tag_index: {}".format(pos))
+            print("tokens: {}".format("".join(tokens)))
+            print("choice_masks: {}".format(choice_masks))
+            print("input_ids:\n", input_ids)
+            print("heads:\n", heads)
+            print("rels:\n", rels)
+
+        while len(input_ids) < max_num_choices:
+            input_ids.append([0] * max_seq_length)
+            attention_mask.append([0] * max_seq_length)
+            token_type_ids.append([0] * max_seq_length)
+            choice_masks.append(0)
+
+        assert len(input_ids) == max_num_choices
+        assert len(attention_mask) == max_num_choices
+        assert len(token_type_ids) == max_num_choices
+        assert len(choice_masks) == max_num_choices
+
+        if compute_dist:
+            features.append(
+                InputParsedFeatures(
+                    unique_id=unique_id,
+                    example_id=example.example_id,
+                    tag=tag,
+                    tokens=tokens,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    choice_masks=choice_masks,
+                    label=label,
+                    heads=heads.to_sparse(),
+                    rels=rels.to_sparse(),
+                    dists=dists.to_sparse()))
+        else:
+            features.append(
+                InputParsedFeatures(
+                    unique_id=unique_id,
+                    example_id=example.example_id,
+                    tag=tag,
+                    tokens=tokens,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    choice_masks=choice_masks,
+                    label=label,
+                    heads=heads.to_sparse(),
+                    rels=rels.to_sparse()))
+
+    max_tokens_for_doc = max_seq_length - 3  # [CLS] choice [SEP] document [SEP]
+    features = []
+    unique_id = 0
+
+    for (example_index, example) in enumerate(tqdm(examples)):
+
+        label = example.answer_index
+        if label != None:
+            _loop(example, unique_id, label)
+        else:
+            _loop(example, unique_id, None)
+        unique_id += 1
+
+        if unique_id % 12000 == 0:
+            print("unique_id: %s" % (unique_id))
+    print("unique_id: %s" % (unique_id))
+    return features
+"""
