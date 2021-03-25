@@ -130,7 +130,7 @@ class c3Processor(DataProcessor):
                         d += [d[-1]]
                     self.D[sid] += [d]
 
-        with open(self.data_dir + "test.json", "r", encoding="utf8") as f:
+        with open(self.data_dir + "/test.json", "r", encoding="utf8") as f:
             data = json.load(f)
             for i in range(len(data)):
                 for j in range(len(data[i][1])):
@@ -140,11 +140,8 @@ class c3Processor(DataProcessor):
                         d += [data[i][1][j]["choice"][k].lower()]
                     for k in range(len(data[i][1][j]["choice"]), 4):
                         d += ['无效答案']  # 有些C3数据选项不足4个，添加[无效答案]能够有效增强模型收敛稳定性
-                    if sid in [0, 1]:
-                        d += [data[i][1][j]["answer"].lower()]
-                    else:
-                        # for test set we pick the last choice as answer
-                        d += [d[-1]]
+                    # for test set we pick the last choice as answer
+                    d += [d[-1]]
                     self.D[2] += [d]
 
 

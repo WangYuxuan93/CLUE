@@ -472,7 +472,7 @@ class SDPParser(object):
         heads_c_list, rels_c_list = [], []
         lengths = []
         for i in range(0, len(input_ids), batch_size):
-            if i % 8 == 0:
+            if i % 1024 == 0:
                 print ("%d..."%i, end="")
                 sys.stdout.flush()
             inputs = input_ids[i:i+batch_size]
