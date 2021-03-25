@@ -4,6 +4,7 @@ import gc
 import json
 import nltk
 import jieba
+import pkuseg
 
 #current_path = os.path.dirname(os.path.realpath(__file__))
 #root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -163,7 +164,7 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             first_ids_list.append(first_ids)
             #print ("wps:\n", wps)
             #print ("first_ids:\n", first_ids)
-        elif type in ["nltk", "jieba"]:
+        elif type in ["nltk", "jieba", "pkuseg"]:
             # ignore first two cls token and the last sep token
             wps_valid = []
             for i in range(len(wps)):
@@ -176,8 +177,10 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             text = "".join(wps[2:-1]).replace("\u0120", " ")
             if type == "nltk":
                 tokens = nltk.word_tokenize(text)
-            else:
+            elif type == "jieba":
                 tokens = jieba.cut(text)
+            elif type == "pkuseg":
+                tokens = self.pkuseg.cut(text)
             #if debug:
             #    print ("text:\n", text)
             #    print ("tokens:\n", tokens)
@@ -459,6 +462,9 @@ class SDPParser(object):
     def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
                     max_length=512, align_type="jieba", return_tensor=True, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
+
+        if align_type == 'pkuseg':
+            self.pkuseg = pkuseg.pkuseg()
         
         first_ids_list = []
         heads_a_list, rels_a_list = [], []
@@ -466,7 +472,7 @@ class SDPParser(object):
         heads_c_list, rels_c_list = [], []
         lengths = []
         for i in range(0, len(input_ids), batch_size):
-            if i % 1024 == 0:
+            if i % 8 == 0:
                 print ("%d..."%i, end="")
                 sys.stdout.flush()
             inputs = input_ids[i:i+batch_size]
@@ -609,8 +615,11 @@ class SDPParser(object):
                     print ("heads (end):\n", heads)
                     print ("rels (end):\n", rels)
                     exit()
-            heads_list.append(heads)
-            rels_list.append(rels)
+            heads_list.append(heads.to_sparse())
+            rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
 
         heads = torch.stack(heads_list, dim=0)
         rels = torch.stack(rels_list, dim=0)

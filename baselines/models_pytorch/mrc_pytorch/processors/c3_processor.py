@@ -107,16 +107,17 @@ class c3Processor(DataProcessor):
         self.D = [[], [], []]
         self.data_dir = data_dir
 
-        for sid in range(3):
+        for sid in range(2):
             data = []
             for subtask in ["d", "m"]:
-                with open(self.data_dir + "/c3-" + subtask + "-" + ["train.json", "dev.json", "test.json"][sid],
+                with open(self.data_dir + "/c3-" + subtask + "-" + ["train.json", "dev.json"][sid],
                           "r", encoding="utf8") as f:
                     data += json.load(f)
             if sid == 0:
                 random.shuffle(data)
             for i in range(len(data)):
                 for j in range(len(data[i][1])):
+                    # [context, choice 0, choice 1, choice 2, choice 3, answer]
                     d = ['\n'.join(data[i][0]).lower(), data[i][1][j]["question"].lower()]
                     for k in range(len(data[i][1][j]["choice"])):
                         d += [data[i][1][j]["choice"][k].lower()]
@@ -128,6 +129,24 @@ class c3Processor(DataProcessor):
                         # for test set we pick the last choice as answer
                         d += [d[-1]]
                     self.D[sid] += [d]
+
+        with open(self.data_dir + "test.json", "r", encoding="utf8") as f:
+            data = json.load(f)
+            for i in range(len(data)):
+                for j in range(len(data[i][1])):
+                    # [context, choice 0, choice 1, choice 2, choice 3, answer]
+                    d = ['\n'.join(data[i][0]).lower(), data[i][1][j]["question"].lower()]
+                    for k in range(len(data[i][1][j]["choice"])):
+                        d += [data[i][1][j]["choice"][k].lower()]
+                    for k in range(len(data[i][1][j]["choice"]), 4):
+                        d += ['无效答案']  # 有些C3数据选项不足4个，添加[无效答案]能够有效增强模型收敛稳定性
+                    if sid in [0, 1]:
+                        d += [data[i][1][j]["answer"].lower()]
+                    else:
+                        # for test set we pick the last choice as answer
+                        d += [d[-1]]
+                    self.D[2] += [d]
+
 
     def get_train_examples(self):
         """See base class."""
@@ -293,17 +312,17 @@ def convert_parsed_examples_to_features(
                               attention_mask=attention_mask_list[i],
                               token_type_ids=token_type_ids_list[i],
                               label_id=label_id_list[i],
-                              heads=heads[i].to_sparse(),
-                              rels=rels[i].to_sparse(),
-                              dists=dists[i].to_sparse()))
+                              heads=heads[i] if heads.is_sparse else heads[i].to_sparse(),
+                              rels=rels[i] if rels.is_sparse else rels[i].to_sparse(),
+                              dists=dists[i] if dists.is_sparse else dists[i].to_sparse()))
         else:
             features[-1].append(
                 InputParsedFeatures(input_ids=input_ids_list[i],
                               attention_mask=attention_mask_list[i],
                               token_type_ids=token_type_ids_list[i],
                               label_id=label_id_list[i],
-                              heads=heads[i].to_sparse(),
-                              rels=rels[i].to_sparse()))
+                              heads=heads[i] if heads.is_sparse else heads[i].to_sparse(),
+                              rels=rels[i] if rels.is_sparse else rels[i].to_sparse()))
 
         if len(features[-1]) == n_class:
             features.append([])
