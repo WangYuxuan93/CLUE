@@ -146,126 +146,6 @@ def get_valid_wp(wps, idx):
     return wp, idx
 
 
-def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
-    # type (nltk: use nltk word_tokenize to align|rule: use rule to align)
-
-    first_ids_list = []
-
-    for ids in input_ids:
-        wps = tokenizer.convert_ids_to_tokens(ids)
-        if type == "rule":
-            # for root token and the first token
-            first_ids = [1,2]
-            #print (wps)
-            for i in range(3, len(wps)-1):
-                if wps[i][0] == "\u0120" or wps[i][0] in string.punctuation or wps[i-1][-1] in string.punctuation:
-                    first_ids.append(i)
-
-            first_ids_list.append(first_ids)
-            #print ("wps:\n", wps)
-            #print ("first_ids:\n", first_ids)
-        elif type in ["nltk", "jieba", "pkuseg"]:
-            # ignore first two cls token and the last sep token
-            wps_valid = []
-            for i in range(len(wps)):
-                # rm pad & sep tokens
-                if wps[i] in [tokenizer.pad_token, tokenizer.sep_token]:
-                    break
-                wps_valid.append(wps[i])
-            wps_valid.append(tokenizer.sep_token)
-            wps = wps_valid
-            text = "".join(wps[2:-1]).replace("\u0120", " ")
-            if type == "nltk":
-                tokens = nltk.word_tokenize(text)
-            elif type == "jieba":
-                tokens = jieba.cut(text)
-            elif type == "pkuseg":
-                tokens = self.pkuseg.cut(text)
-            #if debug:
-            #    print ("text:\n", text)
-            #    print ("tokens:\n", tokens)
-            #    print ("wps:\n", wps)
-            tokens = reform(tokens, text)
-            # for root token
-            first_ids = [1]
-            wp_idx = 2
-            #wp = wps[wp_idx]
-            wp, wp_idx = get_valid_wp(wps, wp_idx)
-            i = 0
-            token = tokens[i]
-            #for token in tokens:
-            while i < len(tokens):
-                token = tokens[i]
-                offset = 0
-                #if debug:
-                #    print ("token:{} | wp:{}".format(token[offset:], wp))
-                """
-                if token.startswith("``") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
-                    token = token.replace("``", '"')
-                elif token.startswith("''") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
-                    token = token.replace("\'\'", '"')
-                elif token.startswith("`") and (wp[0] == "'" or (len(wp)>1 and wp[1]=='"')):
-                    token = token.replace("`", "'")
-                """
-                if (wp.startswith("\u0120") and token.startswith(wp[1:])) or token.startswith(wp):
-                    first_ids.append(wp_idx)
-                    offset += len(wp) - 1 if wp.startswith("\u0120") else len(wp)
-                    wp_idx += 1
-                    #wp = wps[wp_idx]
-                    wp, wp_idx = get_valid_wp(wps, wp_idx)
-                else:
-                    token = token+tokens[i+1]
-                    i += 1
-                    while (wp.startswith("\u0120") and len(token)<len(wp)-1) or (not wp.startswith("\u0120") and len(token)<len(wp)):
-                        token = token+tokens[i+1]
-                        i += 1
-                    if (wp.startswith("\u0120") and token.startswith(wp[1:])) or token.startswith(wp):
-                        first_ids.append(wp_idx)
-                        offset += len(wp) - 1 if wp.startswith("\u0120") else len(wp)
-                        wp_idx += 1
-                        #wp = wps[wp_idx]
-                        wp, wp_idx = get_valid_wp(wps, wp_idx)
-                    else:
-                        print ("Mismatch (start) in {} token:{} | wp:{}:\ntoks:{}\nwp:{}".format(wp_idx, 
-                            token[offset:], wp, tokens, wps))
-                        exit()
-                while offset < len(token):
-                    #if debug:
-                    #    print ("token:{} | wp:{}".format(token[offset:], wp))
-                    if token[offset:].startswith(wp):
-                        offset += len(wp)
-                        wp_idx += 1
-                        #wp = wps[wp_idx]
-                        wp, wp_idx = get_valid_wp(wps, wp_idx)
-                    else:
-                        token = token + tokens[i+1]
-                        i += 1
-                        while len(token[offset:]) < len(wp):
-                            token = token + tokens[i+1]
-                            i += 1
-                        if token[offset:].startswith(wp):
-                            offset += len(wp)
-                            wp_idx += 1
-                            #wp = wps[wp_idx]
-                            wp, wp_idx = get_valid_wp(wps, wp_idx)
-                        else:
-                            print ("Mismatch (mid) in {} token:{} | wp:{}\ntoks:{}\nwp:{}".format(wp_idx, 
-                                token[offset:], wp, tokens, wps))
-                            exit()
-                i += 1
-            if debug:
-                print ("tokens:\n", tokens)
-                print ("wps:\n", wps)
-                print ("first_ids:\n", first_ids)
-            first_ids_list.append(first_ids)
-
-    max_len = max([len(i) for i in first_ids_list])
-    first_ids = np.stack(
-          [np.pad(a, (0, max_len - len(a)), 'constant', constant_values=0) for a in first_ids_list])
-    first_ids = torch.from_numpy(first_ids)
-    return first_ids, first_ids_list
-
-
 def split_ids(tokenizer, input_ids, has_c=False, debug=False):
     sep_id = tokenizer.sep_token_id
     cls_id = tokenizer.cls_token_id
@@ -429,6 +309,127 @@ class SDPParser(object):
         self.network = self.network.to(device)
         self.network.load_state_dict(torch.load(model_name, map_location=device))
 
+
+    def get_first_ids(self, input_ids, type="pkuseg", debug=False):
+        # type (nltk: use nltk word_tokenize to align|rule: use rule to align)
+        tokenizer = self.tokenizer
+        first_ids_list = []
+
+        for ids in input_ids:
+            wps = tokenizer.convert_ids_to_tokens(ids)
+            if type == "rule":
+                # for root token and the first token
+                first_ids = [1,2]
+                #print (wps)
+                for i in range(3, len(wps)-1):
+                    if wps[i][0] == "\u0120" or wps[i][0] in string.punctuation or wps[i-1][-1] in string.punctuation:
+                        first_ids.append(i)
+
+                first_ids_list.append(first_ids)
+                #print ("wps:\n", wps)
+                #print ("first_ids:\n", first_ids)
+            elif type in ["nltk", "jieba", "pkuseg"]:
+                # ignore first two cls token and the last sep token
+                wps_valid = []
+                for i in range(len(wps)):
+                    # rm pad & sep tokens
+                    if wps[i] in [tokenizer.pad_token, tokenizer.sep_token]:
+                        break
+                    wps_valid.append(wps[i])
+                wps_valid.append(tokenizer.sep_token)
+                wps = wps_valid
+                text = "".join(wps[2:-1]).replace("\u0120", " ")
+                if type == "nltk":
+                    tokens = nltk.word_tokenize(text)
+                elif type == "jieba":
+                    tokens = jieba.cut(text)
+                elif type == "pkuseg":
+                    tokens = self.pkuseg.cut(text)
+                #if debug:
+                #    print ("text:\n", text)
+                #    print ("tokens:\n", tokens)
+                #    print ("wps:\n", wps)
+                tokens = reform(tokens, text)
+                # for root token
+                first_ids = [1]
+                wp_idx = 2
+                #wp = wps[wp_idx]
+                wp, wp_idx = get_valid_wp(wps, wp_idx)
+                i = 0
+                token = tokens[i]
+                #for token in tokens:
+                while i < len(tokens):
+                    token = tokens[i]
+                    offset = 0
+                    #if debug:
+                    #    print ("token:{} | wp:{}".format(token[offset:], wp))
+                    """
+                    if token.startswith("``") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
+                        token = token.replace("``", '"')
+                    elif token.startswith("''") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
+                        token = token.replace("\'\'", '"')
+                    elif token.startswith("`") and (wp[0] == "'" or (len(wp)>1 and wp[1]=='"')):
+                        token = token.replace("`", "'")
+                    """
+                    if (wp.startswith("\u0120") and token.startswith(wp[1:])) or token.startswith(wp):
+                        first_ids.append(wp_idx)
+                        offset += len(wp) - 1 if wp.startswith("\u0120") else len(wp)
+                        wp_idx += 1
+                        #wp = wps[wp_idx]
+                        wp, wp_idx = get_valid_wp(wps, wp_idx)
+                    else:
+                        token = token+tokens[i+1]
+                        i += 1
+                        while (wp.startswith("\u0120") and len(token)<len(wp)-1) or (not wp.startswith("\u0120") and len(token)<len(wp)):
+                            token = token+tokens[i+1]
+                            i += 1
+                        if (wp.startswith("\u0120") and token.startswith(wp[1:])) or token.startswith(wp):
+                            first_ids.append(wp_idx)
+                            offset += len(wp) - 1 if wp.startswith("\u0120") else len(wp)
+                            wp_idx += 1
+                            #wp = wps[wp_idx]
+                            wp, wp_idx = get_valid_wp(wps, wp_idx)
+                        else:
+                            print ("Mismatch (start) in {} token:{} | wp:{}:\ntoks:{}\nwp:{}".format(wp_idx, 
+                                token[offset:], wp, tokens, wps))
+                            exit()
+                    while offset < len(token):
+                        #if debug:
+                        #    print ("token:{} | wp:{}".format(token[offset:], wp))
+                        if token[offset:].startswith(wp):
+                            offset += len(wp)
+                            wp_idx += 1
+                            #wp = wps[wp_idx]
+                            wp, wp_idx = get_valid_wp(wps, wp_idx)
+                        else:
+                            token = token + tokens[i+1]
+                            i += 1
+                            while len(token[offset:]) < len(wp):
+                                token = token + tokens[i+1]
+                                i += 1
+                            if token[offset:].startswith(wp):
+                                offset += len(wp)
+                                wp_idx += 1
+                                #wp = wps[wp_idx]
+                                wp, wp_idx = get_valid_wp(wps, wp_idx)
+                            else:
+                                print ("Mismatch (mid) in {} token:{} | wp:{}\ntoks:{}\nwp:{}".format(wp_idx, 
+                                    token[offset:], wp, tokens, wps))
+                                exit()
+                    i += 1
+                if debug:
+                    print ("tokens:\n", tokens)
+                    print ("wps:\n", wps)
+                    print ("first_ids:\n", first_ids)
+                first_ids_list.append(first_ids)
+
+        max_len = max([len(i) for i in first_ids_list])
+        first_ids = np.stack(
+              [np.pad(a, (0, max_len - len(a)), 'constant', constant_values=0) for a in first_ids_list])
+        first_ids = torch.from_numpy(first_ids)
+        return first_ids, first_ids_list
+
+
     def predict(self, first_ids, ids, debug=False):
         heads, rels = [], []
         masks = torch.ones_like(first_ids)
@@ -496,13 +497,13 @@ class SDPParser(object):
                 input_ids_list_a = [[self.tokenizer.cls_token_id]+x for x in inputs_]
                 ids_b, input_ids_list_b, first_ids_b = None, None, None
             ids_a = torch.from_numpy(np.array(ids_a))
-            fids_a, first_ids_a = get_first_ids(self.tokenizer, ids_a, align_type)
+            fids_a, first_ids_a = self.get_first_ids(ids_a, align_type)
             heads_a, rels_a = self.predict(fids_a, ids_a)
             #print ("heads_a:\n", heads_a)
             #print ("rels_a:\n", rels_a)
             heads_b, rels_b = None, None
             if ids_b is not None:
-                fids_b, first_ids_b = get_first_ids(self.tokenizer, ids_b, align_type)
+                fids_b, first_ids_b = self.get_first_ids(ids_b, align_type)
                 heads_b, rels_b = self.predict(fids_b, ids_b)
                 #print ("heads_b:\n", heads_b)
                 #print ("rels_b:\n", rels_b)
@@ -511,7 +512,7 @@ class SDPParser(object):
 
             heads_c, rels_c = None, None
             if ids_c is not None:
-                fids_c, first_ids_c = get_first_ids(self.tokenizer, ids_c, align_type)
+                fids_c, first_ids_c = self.get_first_ids(ids_c, align_type)
                 heads_c, rels_c = self.predict(fids_c, ids_c)
                 #print ("heads_c:\n", heads_c)
                 #print ("rels_c:\n", rels_c)
@@ -563,63 +564,81 @@ class SDPParser(object):
             heads = torch.zeros(max_length, max_length, dtype=torch.long)
             rels = torch.zeros(max_length, max_length, dtype=torch.long)
             arc_indices = torch.nonzero(heads_a[i], as_tuple=False).detach().cpu().numpy()
-            for x,y in arc_indices:
-                label = rels_a[i][x][y]
-                head_id = first_ids[y]
-                mod_ids = wid2wpid[x]
-                for mod_id in mod_ids:
-                    # ignore out of range arcs
-                    if mod_id < max_length and head_id < max_length:
-                        heads[mod_id][head_id] = 1
-                        rels[mod_id][head_id] = label
-
+            if "copy" in expand_type:
+                # copy the arc from first char of the head to all chars consisting its children
+                for x,y in arc_indices:
+                    label = rels_a[i][x][y]
+                    head_id = first_ids[y]
+                    child_ids = wid2wpid[x]
+                    for child_id in child_ids:
+                        # ignore out of range arcs
+                        if child_id < max_length and head_id < max_length:
+                            heads[child_id][head_id] = 1
+                            rels[child_id][head_id] = label
             if heads_b:
                 # here only 1 [SEP] in between, offset is (len_a-1) +1
                 offset = list(heads_a[i].size())[0] #+ 1
                 arc_indices = torch.nonzero(heads_b[i], as_tuple=False).detach().cpu().numpy()
-                for x,y in arc_indices:
-                    label = rels_b[i][x][y]
-                    x = offset + x
-                    y = offset + y
-                    head_id = first_ids[y]
-                    mod_ids = wid2wpid[x]
-                    for mod_id in mod_ids:
-                        # ignore out of range arcs
-                        if mod_id < max_length and head_id < max_length:
-                            heads[mod_id][head_id] = 1
-                            rels[mod_id][head_id] = label
+                if "copy" in expand_type:
+                    # copy the arc from first char of the head to all chars consisting its children
+                    for x,y in arc_indices:
+                        label = rels_b[i][x][y]
+                        x = offset + x
+                        y = offset + y
+                        head_id = first_ids[y]
+                        child_ids = wid2wpid[x]
+                        for child_id in child_ids:
+                            # ignore out of range arcs
+                            if child_id < max_length and head_id < max_length:
+                                heads[child_id][head_id] = 1
+                                rels[child_id][head_id] = label
                 if debug:
                     torch.set_printoptions(profile="full")
                     if heads_b:
                         print ("heads_b:\n", heads_b[i])
                         print ("rels_b:\n", rels_b[i])
                     print ("offset:",offset)
-                    print ("heads (end):\n", heads)
-                    print ("rels (end):\n", rels)
+                    print ("heads (after b):\n", heads)
+                    print ("rels (after b):\n", rels)
 
             if heads_c:
                 # here only 1 [SEP] in between, offset is (len_a-1) +1
                 offset = list(heads_a[i].size())[0] + list(heads_b[i].size())[0] #+ 1
                 arc_indices = torch.nonzero(heads_c[i], as_tuple=False).detach().cpu().numpy()
-                for x,y in arc_indices:
-                    label = rels_c[i][x][y]
-                    x = offset + x
-                    y = offset + y
-                    head_id = first_ids[y]
-                    mod_ids = wid2wpid[x]
-                    for mod_id in mod_ids:
-                        # ignore out of range arcs
-                        if mod_id < max_length and head_id < max_length:
-                            heads[mod_id][head_id] = 1
-                            rels[mod_id][head_id] = label
+                if "copy" in expand_type:
+                    # copy the arc from first char of the head to all chars consisting its children
+                    for x,y in arc_indices:
+                        label = rels_c[i][x][y]
+                        x = offset + x
+                        y = offset + y
+                        head_id = first_ids[y]
+                        child_ids = wid2wpid[x]
+                        for child_id in child_ids:
+                            # ignore out of range arcs
+                            if child_id < max_length and head_id < max_length:
+                                heads[child_id][head_id] = 1
+                                rels[child_id][head_id] = label
                 if debug:
                     if heads_c:
                         print ("heads_c:\n", heads_c[i])
                         print ("rels_c:\n", rels_c[i])
                     print ("offset:",offset)
-                    print ("heads (end):\n", heads)
-                    print ("rels (end):\n", rels)
+                    print ("heads (after c):\n", heads)
+                    print ("rels (after c):\n", rels)
+                
+            if "word" in expand_type:
+                # add arc with word_label from following chars to the first char of each word
+                for wp_ids in wid2wpid.values():
+                    if len(wp_ids) > 1:
+                        start_id = wp_ids[0]
+                        for cid in wp_ids[1:]:
+                            heads[cid][start_id] = 1
+                            rels[cid][start_id] = word_label
+                if debug:
+                    print ("heads (word arc):\n", heads)
+                    print ("rels (word arc):\n", rels)
                     exit()
+
             if max_num_choices > 0:
                 tmp_heads_list.append(heads.to_sparse())
                 tmp_rels_list.append(rels.to_sparse())

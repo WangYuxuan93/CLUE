@@ -1,7 +1,9 @@
 import csv
 import torch
-import logging
 import sys
+import os
+
+import logging
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
@@ -69,3 +71,27 @@ def compute_distance(heads, mask, debug=False):
         if debug:
             print ("dist:\n", dist)
     return dists
+
+
+def cached_features_filename(args, task, data_type='train'):
+    if args.parser_model is None:
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
+            data_type,
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            str(args.max_seq_length),
+            str(task)))
+    else:
+        parser_info = os.path.basename(args.parser_model)
+        if args.parser_return_tensor:
+            parser_info += "-3d"
+        if args.parser_compute_dist:
+            parser_info += "-dist"
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}_{}'.format(
+            data_type,
+            list(filter(None, args.model_name_or_path.split('/'))).pop(),
+            str(args.max_seq_length),
+            str(task),
+            parser_info,
+            args.parser_expand_type,
+            args.parser_align_type))
+    return cached_features_file

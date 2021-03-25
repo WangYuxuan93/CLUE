@@ -9,6 +9,7 @@ from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 from .utils import get_final_text, _get_best_indexes, _compute_softmax, calc_f1_score, calc_em_score
 from collections import OrderedDict
+from .processor import compute_distance, cached_features_filename
 
 from tools import official_tokenization as tokenization
 
@@ -654,25 +655,7 @@ def load_and_cache_cmrc2018_examples(args, task, tokenizer, data_type='train',
             data_type,
             str(task)))
 
-    if args.parser_model is None:
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
-            data_type,
-            list(filter(None, args.model_name_or_path.split('/'))).pop(),
-            str(args.max_seq_length),
-            str(task)))
-    else:
-        parser_info = os.path.basename(args.parser_model)
-        if args.parser_return_tensor:
-            parser_info += "-3d"
-        if args.parser_compute_dist:
-            parser_info += "-dist"
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}'.format(
-            data_type,
-            list(filter(None, args.model_name_or_path.split('/'))).pop(),
-            str(args.max_seq_length),
-            str(task),
-            parser_info,
-            args.parser_expand_type))
+    cached_features_file = cached_features_filename(args, task, data_type=data_type)
 
     data_file = os.path.join(args.data_dir, data_type+'.json')
     if os.path.exists(cached_features_file) and os.path.exists(cached_examples_file):

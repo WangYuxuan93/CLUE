@@ -20,7 +20,7 @@ import string
 
 from .io import conllx_data
 from .models.biaffine_parser import BiaffineParser
-from .sdp_parser import SDPParser, get_first_ids, split_ids, merge_first_ids, first_ids_to_map
+from .sdp_parser import SDPParser, split_ids, merge_first_ids, first_ids_to_map
 from transformers import AutoTokenizer
 
 import logging
@@ -290,13 +290,13 @@ class Parser(SDPParser):
                 input_ids_list_a = [[self.tokenizer.cls_token_id]+x for x in inputs_]
                 ids_b, input_ids_list_b, first_ids_b = None, None, None
             ids_a = torch.from_numpy(np.array(ids_a))
-            fids_a, first_ids_a = get_first_ids(self.tokenizer, ids_a, align_type)
+            fids_a, first_ids_a = self.get_first_ids(ids_a, align_type)
             heads_a, rels_a = self.predict(fids_a, ids_a, return_tensor=return_tensor)
             #print ("heads_a:\n", heads_a)
             #print ("rels_a:\n", rels_a)
             heads_b, rels_b = None, None
             if ids_b is not None:
-                fids_b, first_ids_b = get_first_ids(self.tokenizer, ids_b, align_type)
+                fids_b, first_ids_b = self.get_first_ids(ids_b, align_type)
                 heads_b, rels_b = self.predict(fids_b, ids_b, return_tensor=return_tensor)
                 #print ("heads_b:\n", heads_b)
                 #print ("rels_b:\n", rels_b)
@@ -305,7 +305,7 @@ class Parser(SDPParser):
 
             heads_c, rels_c = None, None
             if ids_c is not None:
-                fids_c, first_ids_c = get_first_ids(self.tokenizer, ids_c, align_type)
+                fids_c, first_ids_c = self.get_first_ids(ids_c, align_type)
                 heads_c, rels_c = self.predict(fids_c, ids_c, return_tensor=return_tensor)
                 #print ("heads_c:\n", heads_c)
                 #print ("rels_c:\n", rels_c)

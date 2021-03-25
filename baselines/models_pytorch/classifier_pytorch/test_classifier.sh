@@ -28,22 +28,25 @@ if [ $# == 0 ]; then
       --model_type=bert \
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
+      --parser_model=$PARSER_MODEL \
       --config_name=data/sbertv2.json \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
-      --parser_compute_dist \
       --parser_return_tensor \
+      --parser_align_type pkuseg \
+      --parser_expand_type copy-word \
       --do_train \
       --do_eval \
+      --do_predict \
       --do_lower_case \
       --data_dir=$GLUE_DATA_DIR/${TASK_NAME}/ \
       --max_seq_length=16 \
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=16 \
       --learning_rate=2e-5 \
-      --num_train_epochs=3.0 \
-      --max_steps=15 \
-      --logging_steps=3 \
-      --save_steps=3 \
+      --num_train_epochs=2.0 \
+      --max_steps=0 \
+      --logging_steps=10 \
+      --save_steps=10 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
       --overwrite_output_dir \
       --seed=42

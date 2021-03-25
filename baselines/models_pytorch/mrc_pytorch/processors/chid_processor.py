@@ -10,6 +10,7 @@ from tqdm import tqdm
 from torch.utils.data import TensorDataset
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
+from .processor import compute_distance, cached_features_filename
 
 try:
     import regex as re
@@ -695,25 +696,7 @@ def generate_input(data_file, label_file, example_file, feature_file, tokenizer,
 
 def load_and_cache_chid_examples(args, task, tokenizer, data_type='train', 
                                  return_examples=False, return_features=False):
-    if args.parser_model is None:
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}'.format(
-            data_type,
-            list(filter(None, args.model_name_or_path.split('/'))).pop(),
-            str(args.max_seq_length),
-            str(task)))
-    else:
-        parser_info = os.path.basename(args.parser_model)
-        if args.parser_return_tensor:
-            parser_info += "-3d"
-        if args.parser_compute_dist:
-            parser_info += "-dist"
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}'.format(
-            data_type,
-            list(filter(None, args.model_name_or_path.split('/'))).pop(),
-            str(args.max_seq_length),
-            str(task),
-            parser_info,
-            args.parser_expand_type))
+    cached_features_file = cached_features_filename(args, task, data_type=data_type)
 
     data_file = os.path.join(args.data_dir, data_type+'.json')
     label_file = os.path.join(args.data_dir, data_type+'_answer.json')

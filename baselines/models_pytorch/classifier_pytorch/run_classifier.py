@@ -420,13 +420,14 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
             parser_info += "-3d"
         if args.parser_compute_dist:
             parser_info += "-dist"
-        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}'.format(
+        cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}_{}'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
             str(args.max_seq_length),
             str(task),
             parser_info,
-            args.parser_expand_type))
+            args.parser_expand_type,
+            args.parser_align_type))
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
@@ -549,8 +550,8 @@ def main():
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
     parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
     parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp"], help="Type of the parser")
-    parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word"], help="Policy to expand parses")
-    parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","nltk","rule"], help="Policy to align subwords in parser")
+    parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word","copy-word"], help="Policy to expand parses")
+    parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","pkuseg","rule"], help="Policy to align subwords in parser")
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
     parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
