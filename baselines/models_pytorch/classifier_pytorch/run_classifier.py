@@ -545,6 +545,7 @@ def main():
                         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()))
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument("--optim", default="AdamW", type=str, choices=["BERTAdam","AdamW"], help="Optimizer")
     ## SBERT parameters
     parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")

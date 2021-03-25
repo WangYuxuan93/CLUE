@@ -289,6 +289,7 @@ class Parser(SDPParser):
                 # stay list for align 
                 input_ids_list_a = [[self.tokenizer.cls_token_id]+x for x in inputs_]
                 ids_b, input_ids_list_b, first_ids_b = None, None, None
+                ids_c, input_ids_list_c, first_ids_c = None, None, None
             ids_a = torch.from_numpy(np.array(ids_a))
             fids_a, first_ids_a = self.get_first_ids(ids_a, align_type)
             heads_a, rels_a = self.predict(fids_a, ids_a, return_tensor=return_tensor)
