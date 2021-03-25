@@ -540,7 +540,7 @@ def convert_parsed_examples_to_features(
     flat_input_ids_list = [input_id for input_ids in input_ids_list for input_id in input_ids]
     flat_attention_mask_list = [input_mask for attention_mask in attention_mask_list for input_mask in attention_mask]
     # (num_examples*max_num_choices, seq_len, seq_len)
-    flat_heads, flat_rels = parser.parse_bpes(
+    heads, rels = parser.parse_bpes(
             flat_input_ids_list,
             flat_attention_mask_list,
             has_b=True,
@@ -548,16 +548,17 @@ def convert_parsed_examples_to_features(
             max_length=max_seq_length, 
             align_type=align_type, 
             return_tensor=return_tensor, 
-            sep_token_id=tokenizer.sep_token_id)
+            sep_token_id=tokenizer.sep_token_id,
+            max_num_choices=max_num_choices)
 
-    heads = flat_heads.split(max_num_choices, dim=0)
-    rels = flat_rels.split(max_num_choices, dim=0)
+    #heads = flat_heads.split(max_num_choices, dim=0)
+    #rels = flat_rels.split(max_num_choices, dim=0)
     assert len(heads) == len(unique_id_list)
     assert len(rels) == len(unique_id_list)
 
     dists = None
     if compute_dist:
-        flat_dists = compute_distance(flat_heads, attention_mask_list)
+        flat_dists = compute_distance(heads, attention_mask_list)
         dists = flat_dists.split(max_num_choices, dim=0)
         assert len(dists) == len(unique_id_list)
 
@@ -587,9 +588,9 @@ def convert_parsed_examples_to_features(
                     token_type_ids=token_type_ids_list[i],
                     choice_masks=choice_masks_list[i],
                     label=label_list[i],
-                    heads=heads[i].to_sparse(),
-                    rels=rels[i].to_sparse(),
-                    dists=dists[i].to_sparse()))
+                    heads=heads[i] if heads[i].is_sparse else heads[i].to_sparse(),
+                    rels=rels[i] if rels[i].is_sparse else rels[i].to_sparse(),
+                    dists=dists[i] if dists[i].is_sparse else dists[i].to_sparse()))
         else:
             features.append(
                 InputParsedFeatures(
@@ -602,8 +603,8 @@ def convert_parsed_examples_to_features(
                     token_type_ids=token_type_ids_list[i],
                     choice_masks=choice_masks_list[i],
                     label=label_list[i],
-                    heads=heads[i].to_sparse(),
-                    rels=rels[i].to_sparse()))
+                    heads=heads[i] if heads[i].is_sparse else heads[i].to_sparse(),
+                    rels=rels[i] if rels[i].is_sparse else rels[i].to_sparse()))
 
     return features
 

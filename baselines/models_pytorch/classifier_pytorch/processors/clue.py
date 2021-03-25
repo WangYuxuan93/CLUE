@@ -31,9 +31,14 @@ def collate_fn(batch):
     all_attention_mask = all_attention_mask[:, :max_len]
     all_token_type_ids = all_token_type_ids[:, :max_len]
     if num_items >= 7:
+        if all_heads.is_sparse:
+            all_heads = all_heads.to_dense()
+            all_rels = all_rels.to_dense()
         all_heads = all_heads[:, :max_len, :max_len]
         all_rels = all_rels[:, :max_len, :max_len]
     if num_items == 8:
+        if all_dists.is_sparse:
+            all_dists = all_dists.to_dense()
         all_dists = all_dists[:, :max_len, :max_len]
     
     batch = {}
@@ -200,9 +205,9 @@ def clue_parsed_convert_examples_to_features(
                               token_type_ids=token_type_ids_list[i],
                               label=label,
                               input_len=input_len_list[i],
-                              heads=heads[i],
-                              rels=rels[i],
-                              dists=dists[i]))
+                              heads=heads[i] if heads.is_sparse else heads[i].to_sparse(),
+                              rels=rels[i] if rels.is_sparse else rels[i].to_sparse(),
+                              dists=dists[i] if dists.is_sparse else dists[i].to_sparse()))
         else:
             features.append(
                 InputParsedFeatures(input_ids=input_ids_list[i],
@@ -210,8 +215,8 @@ def clue_parsed_convert_examples_to_features(
                               token_type_ids=token_type_ids_list[i],
                               label=label,
                               input_len=input_len_list[i],
-                              heads=heads[i],
-                              rels=rels[i]))
+                              heads=heads[i] if heads.is_sparse else heads[i].to_sparse(),
+                              rels=rels[i] if rels.is_sparse else rels[i].to_sparse()))
     return features
 
 

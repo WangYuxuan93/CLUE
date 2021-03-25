@@ -4,6 +4,7 @@ import gc
 import json
 import nltk
 import jieba
+import pkuseg
 
 #current_path = os.path.dirname(os.path.realpath(__file__))
 #root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -19,6 +20,7 @@ import string
 
 from .io import conllx_data
 from .models.biaffine_parser import BiaffineParser
+from .sdp_parser import SDPParser, get_first_ids, split_ids, merge_first_ids, first_ids_to_map
 from transformers import AutoTokenizer
 
 import logging
@@ -144,202 +146,7 @@ def get_valid_wp(wps, idx):
         wp = wps[idx]
     return wp, idx
 
-
-def get_first_ids(tokenizer, input_ids, type="jieba", debug=False):
-    # type (nltk: use nltk word_tokenize to align|rule: use rule to align)
-
-    first_ids_list = []
-
-    for ids in input_ids:
-        wps = tokenizer.convert_ids_to_tokens(ids)
-        if type == "rule":
-            # for root token and the first token
-            first_ids = [1,2]
-            #print (wps)
-            for i in range(3, len(wps)-1):
-                if wps[i][0] == "\u0120" or wps[i][0] in string.punctuation or wps[i-1][-1] in string.punctuation:
-                    first_ids.append(i)
-
-            first_ids_list.append(first_ids)
-            #print ("wps:\n", wps)
-            #print ("first_ids:\n", first_ids)
-        elif type in ["nltk", "jieba"]:
-            # ignore first two cls token and the last sep token
-            wps_valid = []
-            for i in range(len(wps)):
-                # rm pad & sep tokens
-                if wps[i] in [tokenizer.pad_token, tokenizer.sep_token]:
-                    break
-                wps_valid.append(wps[i])
-            wps_valid.append(tokenizer.sep_token)
-            wps = wps_valid
-            text = "".join(wps[2:-1]).replace("\u0120", " ")
-            if type == "nltk":
-                tokens = nltk.word_tokenize(text)
-            else:
-                tokens = jieba.cut(text)
-            if debug:
-                print ("text:\n", text)
-                print ("tokens:\n", tokens)
-                print ("wps:\n", wps)
-            tokens = reform(tokens, text)
-            # for root token
-            first_ids = [1]
-            wp_idx = 2
-            #wp = wps[wp_idx]
-            wp, wp_idx = get_valid_wp(wps, wp_idx)
-            i = 0
-            token = tokens[i]
-            #for token in tokens:
-            while i < len(tokens):
-                token = tokens[i]
-                offset = 0
-                if debug:
-                    print ("token:{} | wp:{}".format(token[offset:], wp))
-                """
-                if token.startswith("``") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
-                    token = token.replace("``", '"')
-                elif token.startswith("''") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
-                    token = token.replace("\'\'", '"')
-                elif token.startswith("`") and (wp[0] == "'" or (len(wp)>1 and wp[1]=='"')):
-                    token = token.replace("`", "'")
-                """
-                if (wp.startswith("\u0120") and token.startswith(wp[1:])) or token.startswith(wp):
-                    first_ids.append(wp_idx)
-                    offset += len(wp) - 1 if wp.startswith("\u0120") else len(wp)
-                    wp_idx += 1
-                    #wp = wps[wp_idx]
-                    wp, wp_idx = get_valid_wp(wps, wp_idx)
-                else:
-                    token = token+tokens[i+1]
-                    i += 1
-                    while (wp.startswith("\u0120") and len(token)<len(wp)-1) or (not wp.startswith("\u0120") and len(token)<len(wp)):
-                        token = token+tokens[i+1]
-                        i += 1
-                    if (wp.startswith("\u0120") and token.startswith(wp[1:])) or token.startswith(wp):
-                        first_ids.append(wp_idx)
-                        offset += len(wp) - 1 if wp.startswith("\u0120") else len(wp)
-                        wp_idx += 1
-                        #wp = wps[wp_idx]
-                        wp, wp_idx = get_valid_wp(wps, wp_idx)
-                    else:
-                        print ("Mismatch (start) in {} token:{} | wp:{}:\ntoks:{}\nwp:{}".format(wp_idx, 
-                            token[offset:], wp, tokens, wps))
-                        exit()
-                while offset < len(token):
-                    if debug:
-                        print ("token:{} | wp:{}".format(token[offset:], wp))
-                    if token[offset:].startswith(wp):
-                        offset += len(wp)
-                        wp_idx += 1
-                        #wp = wps[wp_idx]
-                        wp, wp_idx = get_valid_wp(wps, wp_idx)
-                    else:
-                        token = token + tokens[i+1]
-                        i += 1
-                        while len(token[offset:]) < len(wp):
-                            token = token + tokens[i+1]
-                            i += 1
-                        if token[offset:].startswith(wp):
-                            offset += len(wp)
-                            wp_idx += 1
-                            #wp = wps[wp_idx]
-                            wp, wp_idx = get_valid_wp(wps, wp_idx)
-                        else:
-                            print ("Mismatch (mid) in {} token:{} | wp:{}\ntoks:{}\nwp:{}".format(wp_idx, 
-                                token[offset:], wp, tokens, wps))
-                            exit()
-                i += 1
-            if debug:
-                print ("tokens:\n", tokens)
-                print ("wps:\n", wps)
-                print ("first_ids:\n", first_ids)
-            first_ids_list.append(first_ids)
-
-    max_len = max([len(i) for i in first_ids_list])
-    first_ids = np.stack(
-          [np.pad(a, (0, max_len - len(a)), 'constant', constant_values=0) for a in first_ids_list])
-    first_ids = torch.from_numpy(first_ids)
-    return first_ids, first_ids_list
-
-
-def split_ids(tokenizer, input_ids):
-    sep_id = tokenizer.sep_token_id
-    cls_id = tokenizer.cls_token_id
-    input_ids_list_a, input_ids_list_b = [], []
-
-    # input_ids: [CLS] ... [SEP] ... [SEP]
-    for ids in input_ids:
-        #print ("ids:\n", ids)
-        sep_index = ids.index(sep_id)
-        # [CLS] [CLS] ... [SEP] , the second cls is for root
-        input_ids_list_a.append([cls_id]+ids[:sep_index]+[sep_id])
-        input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+1:])
-        #print ("ids_a:\n", input_ids_list_a[-1])
-        #print ("ids_b:\n", input_ids_list_b[-1])
-
-    max_len_a = max([len(w) for w in input_ids_list_a])
-    inputs_a = np.stack(
-          [np.pad(a, (0, max_len_a - len(a)), 'constant', constant_values=tokenizer.pad_token_id) for a in input_ids_list_a])
-    max_len_b = max([len(w) for w in input_ids_list_b])
-    inputs_b = np.stack(
-          [np.pad(b, (0, max_len_b - len(b)), 'constant', constant_values=tokenizer.pad_token_id) for b in input_ids_list_b])
-    return inputs_a, inputs_b, input_ids_list_a, input_ids_list_b
-
-
-def merge_first_ids(tokenizer, ids, ids_a, first_ids_a, ids_b=None, first_ids_b=None, debug=False):
-    sep_id = tokenizer.sep_token_id
-    first_ids_list = []
-    for i in range(len(ids_a)):
-        #print (ids_a)
-        merge_ids = ids_a[i][1:]
-        # minus 1 for removing the root token
-        first_ids = [x-1 for x in first_ids_a[i]] + [len(merge_ids)-1]
-        if ids_b is not None:
-            # x -1 for rm the [CLS] of ids_b, offset = len(merge_ids)-1
-            first_ids += [x-1+len(merge_ids)-1 for x in first_ids_b[i][1:]]
-            # only 1 [SEP] for chinese bert/roberta
-            merge_ids += ids_b[i][2:]
-            first_ids += [len(merge_ids)-1]
-        if debug:
-            print ("ids_a:\n{}".format(ids_a[i]))
-            print ("first_ids_a:\n",first_ids_a)
-            if ids_b is not None:
-                print ("ids_b:\n{}".format(ids_b[i]))
-                print ("first_ids_b:\n",first_ids_b)
-            print ("first_ids:\n",first_ids)
-            print ("merge_ids:\n", merge_ids)
-            print ("ids:\n", ids[i])
-        assert merge_ids == ids[i][:len(merge_ids)]
-        
-        first_ids_list.append(first_ids)
-    return first_ids_list
-
-
-def first_ids_to_map(first_ids, lengths, debug=False):
-    assert len(first_ids) == len(lengths)
-    wid2wpid_list = []
-    for fids, l in zip(first_ids, lengths):
-        wid2wpid = {}
-        wpid2wid = {}
-        # first id starts from 1 (exclude cls token)
-        # ends l-1 (exclu/de sep token)
-        for i in range(l):
-            if i in fids:
-                wid2wpid[len(wid2wpid)] = [i]
-                wpid2wid[i] = len(wid2wpid) - 1
-            else:
-                wid2wpid[len(wid2wpid) - 1].append(i)
-                wpid2wid[i] = len(wid2wpid) - 1
-        wid2wpid_list.append(wid2wpid)
-    if debug:
-        print ("first_ids:\n", first_ids)
-        print ("lengths:\n", lengths)
-        print ("wid2wpid_list:\n", wid2wpid_list)
-    return wid2wpid_list
-
-
-class Parser(object):
+class Parser(SDPParser):
     def __init__(self, model_path, pretrained_lm="roberta", lm_path=None,
                 use_pretrained_static=False, batch_size=16, parser_type="ptb"):
         cuda = torch.cuda.is_available()
@@ -446,13 +253,17 @@ class Parser(object):
                 #rels.append([self.rel_alphabet.get_instance(r) for r in rels_pred[j][1:length]])
         return heads, rels
 
-    def parse_bpes(self, input_ids, masks, batch_size=None,has_b=False,expand_type="copy",
-                    max_length=512, align_type="jieba", return_tensor=False, sep_token_id=2, **kwargs):
+    def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
+                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
+
+        if align_type == 'pkuseg':
+            self.pkuseg = pkuseg.pkuseg()
         
         first_ids_list = []
         heads_a_list, rels_a_list = [], []
         heads_b_list, rels_b_list = [], []
+        heads_c_list, rels_c_list = [], []
         lengths = []
         for i in range(0, len(input_ids), batch_size):
             if i % 1024 == 0:
@@ -466,8 +277,12 @@ class Parser(object):
             inputs_ = [x[:max_len] for x in inputs]
             #print ("inputs_:\n", inputs_)
             if has_b:
-                ids_a, ids_b, input_ids_list_a, input_ids_list_b = split_ids(self.tokenizer, inputs_)
+                ids_a, ids_b, input_ids_list_a, input_ids_list_b, ids_c, input_ids_list_c = split_ids(self.tokenizer, inputs_, has_c=has_c)
                 ids_b = torch.from_numpy(ids_b)
+                if has_c:
+                    ids_c = torch.from_numpy(ids_c)
+                else:
+                    ids_c, input_ids_list_c, first_ids_c = None, None, None
             else:
                 # add the root token, use as parser input
                 ids_a = [[self.tokenizer.cls_token_id]+x for x in inputs_]
@@ -488,114 +303,33 @@ class Parser(object):
                 heads_b_list.extend(heads_b)
                 rels_b_list.extend(rels_b)
 
-            first_ids = merge_first_ids(self.tokenizer, inputs_, input_ids_list_a, first_ids_a, input_ids_list_b, first_ids_b)
+            heads_c, rels_c = None, None
+            if ids_c is not None:
+                fids_c, first_ids_c = get_first_ids(self.tokenizer, ids_c, align_type)
+                heads_c, rels_c = self.predict(fids_c, ids_c, return_tensor=return_tensor)
+                #print ("heads_c:\n", heads_c)
+                #print ("rels_c:\n", rels_c)
+                heads_c_list.extend(heads_c)
+                rels_c_list.extend(rels_c)
+
+            first_ids = merge_first_ids(self.tokenizer, inputs_, input_ids_list_a, first_ids_a, 
+                                        ids_b=input_ids_list_b, first_ids_b=first_ids_b,
+                                        ids_c=input_ids_list_c, first_ids_c=first_ids_c)
             first_ids_list.extend(first_ids)
             heads_a_list.extend(heads_a)
             rels_a_list.extend(rels_a)
         if return_tensor:
-            heads, rels = self.align_heads(self.tokenizer, first_ids_list, lengths, heads_a_list, rels_a_list, heads_b_list, rels_b_list, 
-                        max_length=max_length, expand_type=expand_type)
+            heads, rels = self.align_heads(self.tokenizer, first_ids_list, lengths, heads_a_list, rels_a_list, 
+                                            heads_b=heads_b_list, rels_b=rels_b_list, 
+                                            heads_c=heads_c_list, rels_c=rels_c_list,
+                                            max_length=max_length, expand_type=expand_type,
+                                            max_num_choices=max_num_choices)
 
         else:
             print ("2D version align heads need to be fixed for chinese bert")
             exit()
             heads, rels = self.align_heads_(self.tokenizer, first_ids_list, heads_a_list, rels_a_list, heads_b_list, rels_b_list, 
                             max_length=max_length, expand_type=expand_type)
-        """
-        if return_tensor:
-            heads = torch.from_numpy(heads)
-            rels = torch.from_numpy(rels)
-            mask = torch.from_numpy(np.array(masks))
-
-            batch_size, seq_len = heads.size()
-
-            # (batch, seq_len), seq mask, where at position 0 is 0
-            root_mask = torch.arange(seq_len, device=heads.device).gt(0).float().unsqueeze(0) * mask
-            zeros = torch.zeros_like(root_mask, device=heads.device)
-            root_mask = torch.where(torch.from_numpy(np.array(input_ids))==sep_token_id, zeros, root_mask)
-            # (batch, seq_len, seq_len)
-            mask_3D = (root_mask.unsqueeze(-1) * mask.unsqueeze(1))
-            # (batch, seq_len, seq_len)
-            heads_3D = torch.zeros((batch_size, seq_len, seq_len), dtype=torch.int32, device=heads.device)
-            heads_3D.scatter_(-1, heads.unsqueeze(-1), 1)
-            heads_3D = heads_3D * mask_3D
-            # (batch, seq_len, seq_len)
-            rels_3D = torch.zeros((batch_size, seq_len, seq_len), dtype=torch.long, device=heads.device)
-            rels_3D.scatter_(-1, heads.unsqueeze(-1), rels.unsqueeze(-1))
-
-            heads = heads_3D
-            rels = rels_3D
-        """
-
-        return heads, rels
-
-    def align_heads(self, tokenizer, first_ids_list, lengths, heads_a, rels_a, 
-                    heads_b=None, rels_b=None,
-                    max_length=None, expand_type="copy", debug=False):
-        null_label = self.parser_label_map[self.null_label]
-        word_label = self.parser_label_map[self.word_label]
-
-        heads_list = []
-        rels_list = []
-
-        wid2wpid_list = first_ids_to_map(first_ids_list, lengths)
-        #print ("first_ids_list:\n", first_ids_list)
-        #print ("wid2wpid_list:\n", wid2wpid_list)
-        for i in range(len(heads_a)):
-            # the i-th example
-            wid2wpid = wid2wpid_list[i]
-            first_ids = first_ids_list[i]
-            if debug:
-                print ("first_ids:\n", first_ids_list[i])
-                print ("wid2wpid:\n",  wid2wpid_list[i])
-                print ("heads_a:\n", heads_a[i])
-                print ("rels_a:\n", rels_a[i])
-                if heads_b:
-                    print ("heads_b:\n", heads_b[i])
-                    print ("rels_b:\n", rels_b[i])
-            
-            heads = torch.zeros(max_length, max_length, dtype=torch.long)
-            rels = torch.zeros(max_length, max_length, dtype=torch.long)
-            arc_indices = torch.nonzero(heads_a[i], as_tuple=False).detach().cpu().numpy()
-            for x,y in arc_indices:
-                label = rels_a[i][x][y]
-                head_id = first_ids[y]
-                mod_ids = wid2wpid[x]
-                for mod_id in mod_ids:
-                    # ignore out of range arcs
-                    if mod_id < max_length and head_id < max_length:
-                        heads[mod_id][head_id] = 1
-                        rels[mod_id][head_id] = label
-
-            if heads_b:
-                # here only 1 [SEP] in between, offset is (len_a-1) +1
-                offset = list(heads_a[i].size())[0] #+ 1
-                arc_indices = torch.nonzero(heads_b[i], as_tuple=False).detach().cpu().numpy()
-                for x,y in arc_indices:
-                    label = rels_b[i][x][y]
-                    x = offset + x
-                    y = offset + y
-                    head_id = first_ids[y]
-                    mod_ids = wid2wpid[x]
-                    for mod_id in mod_ids:
-                        # ignore out of range arcs
-                        if mod_id < max_length and head_id < max_length:
-                            heads[mod_id][head_id] = 1
-                            rels[mod_id][head_id] = label
-                if debug:
-                    torch.set_printoptions(profile="full")
-                    print ("offset:",offset)
-                    print ("heads (end):\n", heads)
-                    print ("rels (end):\n", rels)
-            heads_list.append(heads)
-            rels_list.append(rels)
-
-        heads = torch.stack(heads_list, dim=0)
-        rels = torch.stack(rels_list, dim=0)
-
-        if debug:
-            print ("heads:\n", heads)
-            print ("rels:\n", rels)
 
         return heads, rels
 

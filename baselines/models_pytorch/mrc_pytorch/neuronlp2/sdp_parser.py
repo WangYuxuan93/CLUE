@@ -460,7 +460,7 @@ class SDPParser(object):
         return heads, rels
 
     def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
-                    max_length=512, align_type="jieba", return_tensor=True, **kwargs):
+                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
 
         if align_type == 'pkuseg':
@@ -528,14 +528,15 @@ class SDPParser(object):
         heads, rels = self.align_heads(self.tokenizer, first_ids_list, lengths, heads_a_list, rels_a_list, 
                                         heads_b=heads_b_list, rels_b=rels_b_list, 
                                         heads_c=heads_c_list, rels_c=rels_c_list,
-                                        max_length=max_length, expand_type=expand_type)
+                                        max_length=max_length, expand_type=expand_type,
+                                        max_num_choices=max_num_choices)
 
         return heads, rels
 
     def align_heads(self, tokenizer, first_ids_list, lengths, heads_a, rels_a, 
                     heads_b=None, rels_b=None,
                     heads_c=None, rels_c=None,
-                    max_length=None, expand_type="copy", debug=False):
+                    max_length=None, expand_type="copy", max_num_choices=-1, debug=False):
         null_label = self.parser_label_map[self.null_label]
         word_label = self.parser_label_map[self.word_label]
 
@@ -545,6 +546,10 @@ class SDPParser(object):
         wid2wpid_list = first_ids_to_map(first_ids_list, lengths)
         #print ("first_ids_list:\n", first_ids_list)
         #print ("wid2wpid_list:\n", wid2wpid_list)
+        # this is for cases where max_num_choices > 0
+        num_in_list = 0
+        tmp_heads_list = []
+        tmp_rels_list = []
         for i in range(len(heads_a)):
             # the i-th example
             wid2wpid = wid2wpid_list[i]
@@ -615,14 +620,35 @@ class SDPParser(object):
                     print ("heads (end):\n", heads)
                     print ("rels (end):\n", rels)
                     exit()
-            heads_list.append(heads.to_sparse())
-            rels_list.append(rels.to_sparse())
+            if max_num_choices > 0:
+                tmp_heads_list.append(heads.to_sparse())
+                tmp_rels_list.append(rels.to_sparse())
+                num_in_list += 1
+                if num_in_list == max_num_choices:
+                    heads_list.append(torch.stack(tmp_heads_list, dim=0))
+                    rels_list.append(torch.stack(tmp_rels_list, dim=0))
+                    tmp_heads_list = []
+                    tmp_rels_list = []
+                    num_in_list = 0
+            else:
+                heads_list.append(heads.to_sparse())
+                rels_list.append(rels.to_sparse())
             # delete dense tensor to save mem
             del heads
             del rels
 
-        heads = torch.stack(heads_list, dim=0)
-        rels = torch.stack(rels_list, dim=0)
+
+        if max_num_choices > 0:
+            # add the last group of examples
+            if tmp_heads_list:
+                heads_list.append(torch.stack(tmp_heads_list, dim=0))
+                rels_list.append(torch.stack(tmp_rels_list, dim=0))
+            # batch * (num_choices, seq_len, seq_len).to_sparse()
+            heads = heads_list
+            rels = rels_list
+        else:
+            heads = torch.stack(heads_list, dim=0)
+            rels = torch.stack(rels_list, dim=0)
 
         if debug:
             print ("heads:\n", heads)

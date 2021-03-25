@@ -584,9 +584,9 @@ def convert_parsed_examples_to_features(
                              'token_type_ids': token_type_ids_list[i],
                              'start_position': start_position_list[i],
                              'end_position': end_position_list[i],
-                             'heads': heads[i].to_sparse(),
-                             'rels': rels[i].to_sparse(),
-                             'dists': dists[i].to_sparse()})
+                             'heads': heads[i] if heads.is_sparse else heads[i].to_sparse(),
+                             'rels': rels[i] if rels.is_sparse else rels[i].to_sparse(),
+                             'dists': dists[i] if dists.is_sparse else dists[i].to_sparse()})
         else:
             features.append({'unique_id': unique_id_list[i],
                              'example_index': example_index_list[i],
@@ -599,8 +599,8 @@ def convert_parsed_examples_to_features(
                              'token_type_ids': token_type_ids_list[i],
                              'start_position': start_position_list[i],
                              'end_position': end_position_list[i],
-                             'heads': heads[i].to_sparse(),
-                             'rels': rels[i].to_sparse()})
+                             'heads': heads[i] if heads.is_sparse else heads[i].to_sparse(),
+                             'rels': rels[i] if rels.is_sparse else rels[i].to_sparse()})
             
 
     #print('features num:', len(features))

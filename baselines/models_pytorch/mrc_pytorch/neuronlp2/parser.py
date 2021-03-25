@@ -4,6 +4,7 @@ import gc
 import json
 import nltk
 import jieba
+import pkuseg
 
 #current_path = os.path.dirname(os.path.realpath(__file__))
 #root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -252,9 +253,12 @@ class Parser(SDPParser):
                 #rels.append([self.rel_alphabet.get_instance(r) for r in rels_pred[j][1:length]])
         return heads, rels
 
-    def parse_bpes(self, input_ids, masks, batch_size=None,has_b=False,has_c=False,expand_type="copy",
-                    max_length=512, align_type="jieba", return_tensor=False, sep_token_id=2, **kwargs):
+    def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
+                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
+
+        if align_type == 'pkuseg':
+            self.pkuseg = pkuseg.pkuseg()
         
         first_ids_list = []
         heads_a_list, rels_a_list = [], []
@@ -318,7 +322,8 @@ class Parser(SDPParser):
             heads, rels = self.align_heads(self.tokenizer, first_ids_list, lengths, heads_a_list, rels_a_list, 
                                             heads_b=heads_b_list, rels_b=rels_b_list, 
                                             heads_c=heads_c_list, rels_c=rels_c_list,
-                                            max_length=max_length, expand_type=expand_type)
+                                            max_length=max_length, expand_type=expand_type,
+                                            max_num_choices=max_num_choices)
 
         else:
             print ("2D version align heads need to be fixed for chinese bert")

@@ -292,16 +292,18 @@ def convert_parsed_examples_to_features(
 
     features = [[]]
     for i, example in enumerate(examples):
-        if ex_index < 5:
+        if i < 5:
             logger.info("*** Example ***")
             logger.info("guid: %s" % (example.guid))
-            logger.info("tokens: %s" % " ".join(
-                [tokenization.printable_text(x) for x in tokens]))
-            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
+            #logger.info("tokens: %s" % " ".join(
+            #    [tokenization.printable_text(x) for x in tokens]))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids_list[i]]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask_list[i]]))
             logger.info(
-                "token_type_ids: %s" % " ".join([str(x) for x in token_type_ids]))
-            logger.info("label: %s (id = %d)" % (example.label, label_id))
+                "token_type_ids: %s" % " ".join([str(x) for x in token_type_ids_list[i]]))
+            logger.info("label: %s (id = %d)" % (example.label, label_id_list[i]))
+            logger.info("heads: {}".format(heads[i]))
+            logger.info("rels: {}".format(rels[i]))
 
         if compute_dist:
             features[-1].append(

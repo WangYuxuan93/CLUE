@@ -4,6 +4,7 @@ import gc
 import json
 import nltk
 import jieba
+import pkuseg
 
 #current_path = os.path.dirname(os.path.realpath(__file__))
 #root_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -163,7 +164,7 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             first_ids_list.append(first_ids)
             #print ("wps:\n", wps)
             #print ("first_ids:\n", first_ids)
-        elif type in ["nltk", "jieba"]:
+        elif type in ["nltk", "jieba", "pkuseg"]:
             # ignore first two cls token and the last sep token
             wps_valid = []
             for i in range(len(wps)):
@@ -176,8 +177,10 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
             text = "".join(wps[2:-1]).replace("\u0120", " ")
             if type == "nltk":
                 tokens = nltk.word_tokenize(text)
-            else:
+            elif type == "jieba":
                 tokens = jieba.cut(text)
+            elif type == "pkuseg":
+                tokens = self.pkuseg.cut(text)
             #if debug:
             #    print ("text:\n", text)
             #    print ("tokens:\n", tokens)
@@ -263,32 +266,51 @@ def get_first_ids(tokenizer, input_ids, type="nltk", debug=False):
     return first_ids, first_ids_list
 
 
-def split_ids(tokenizer, input_ids, debug=False):
+def split_ids(tokenizer, input_ids, has_c=False, debug=False):
     sep_id = tokenizer.sep_token_id
     cls_id = tokenizer.cls_token_id
     input_ids_list_a, input_ids_list_b = [], []
-
+    input_ids_list_c = []
     # input_ids: [CLS] ... [SEP] ... [SEP]
     for ids in input_ids:
         sep_index = ids.index(sep_id)
-        # [CLS] [CLS] ... [SEP] , the second cls is for root
-        input_ids_list_a.append([cls_id]+ids[:sep_index]+[sep_id])
-        input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+1:])
-        if debug:
-            print ("ids:\n", ids)
-            print ("ids_a:\n", input_ids_list_a[-1])
-            print ("ids_b:\n", input_ids_list_b[-1])
-
+        if not has_c:
+            # [CLS] [CLS] ... [SEP] , the second cls is for root
+            input_ids_list_a.append([cls_id]+ids[:sep_index]+[sep_id])
+            input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+1:])
+            if debug:
+                print ("ids:\n", ids)
+                print ("ids_a:\n", input_ids_list_a[-1])
+                print ("ids_b:\n", input_ids_list_b[-1])
+        else:
+            input_ids_list_a.append([cls_id]+ids[:sep_index]+[sep_id])
+            second_sep_index = ids.index(sep_id, sep_index+1)
+            input_ids_list_b.append([cls_id,cls_id]+ids[sep_index+1:second_sep_index+1])
+            input_ids_list_c.append([cls_id,cls_id]+ids[second_sep_index+1:])
+            if debug:
+                print ("ids:\n", ids)
+                print ("ids_a:\n", input_ids_list_a[-1])
+                print ("ids_b:\n", input_ids_list_b[-1])
+                print ("ids_c:\n", input_ids_list_c[-1])
+        
     max_len_a = max([len(w) for w in input_ids_list_a])
     inputs_a = np.stack(
           [np.pad(a, (0, max_len_a - len(a)), 'constant', constant_values=tokenizer.pad_token_id) for a in input_ids_list_a])
     max_len_b = max([len(w) for w in input_ids_list_b])
     inputs_b = np.stack(
           [np.pad(b, (0, max_len_b - len(b)), 'constant', constant_values=tokenizer.pad_token_id) for b in input_ids_list_b])
-    return inputs_a, inputs_b, input_ids_list_a, input_ids_list_b
+    inputs_c = None
+    if has_c:
+        max_len_c = max([len(w) for w in input_ids_list_c])
+        inputs_c = np.stack(
+            [np.pad(c, (0, max_len_c - len(c)), 'constant', constant_values=tokenizer.pad_token_id) for c in input_ids_list_c])
+
+    return inputs_a, inputs_b, input_ids_list_a, input_ids_list_b, inputs_c, input_ids_list_c
 
 
-def merge_first_ids(tokenizer, ids, ids_a, first_ids_a, ids_b=None, first_ids_b=None, debug=False):
+def merge_first_ids(tokenizer, ids, ids_a, first_ids_a, 
+                    ids_b=None, first_ids_b=None, 
+                    ids_c=None, first_ids_c=None, debug=False):
     sep_id = tokenizer.sep_token_id
     first_ids_list = []
     for i in range(len(ids_a)):
@@ -302,15 +324,25 @@ def merge_first_ids(tokenizer, ids, ids_a, first_ids_a, ids_b=None, first_ids_b=
             # only 1 [SEP] for chinese bert/roberta
             merge_ids += ids_b[i][2:]
             first_ids += [len(merge_ids)-1]
+        if ids_c is not None:
+            # x -1 for rm the [CLS] of ids_c, offset = len(merge_ids)-1
+            first_ids += [x-1+len(merge_ids)-1 for x in first_ids_c[i][1:]]
+            # only 1 [SEP] for chinese bert/roberta
+            merge_ids += ids_c[i][2:]
+            first_ids += [len(merge_ids)-1]
         if debug:
             print ("ids_a:\n{}".format(ids_a[i]))
-            print ("first_ids_a:\n",first_ids_a)
+            print ("first_ids_a:\n",first_ids_a[i])
             if ids_b is not None:
                 print ("ids_b:\n{}".format(ids_b[i]))
-                print ("first_ids_b:\n",first_ids_b)
+                print ("first_ids_b:\n",first_ids_b[i])
+            if ids_c is not None:
+                print ("ids_c:\n{}".format(ids_c[i]))
+                print ("first_ids_c:\n",first_ids_c[i])
             print ("first_ids:\n",first_ids)
             print ("merge_ids:\n", merge_ids)
             print ("ids:\n", ids[i])
+
         assert merge_ids == ids[i][:len(merge_ids)]
         
         first_ids_list.append(first_ids)
@@ -428,12 +460,16 @@ class SDPParser(object):
         return heads, rels
 
     def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
-                    max_length=512, align_type="jieba", return_tensor=True, **kwargs):
+                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
+
+        if align_type == 'pkuseg':
+            self.pkuseg = pkuseg.pkuseg()
         
         first_ids_list = []
         heads_a_list, rels_a_list = [], []
         heads_b_list, rels_b_list = [], []
+        heads_c_list, rels_c_list = [], []
         lengths = []
         for i in range(0, len(input_ids), batch_size):
             if i % 1024 == 0:
@@ -447,8 +483,12 @@ class SDPParser(object):
             inputs_ = [x[:max_len] for x in inputs]
             #print ("inputs_:\n", inputs_)
             if has_b:
-                ids_a, ids_b, input_ids_list_a, input_ids_list_b = split_ids(self.tokenizer, inputs_)
+                ids_a, ids_b, input_ids_list_a, input_ids_list_b, ids_c, input_ids_list_c = split_ids(self.tokenizer, inputs_, has_c=has_c)
                 ids_b = torch.from_numpy(ids_b)
+                if has_c:
+                    ids_c = torch.from_numpy(ids_c)
+                else:
+                    ids_c, input_ids_list_c, first_ids_c = None, None, None
             else:
                 # add the root token, use as parser input
                 ids_a = [[self.tokenizer.cls_token_id]+x for x in inputs_]
@@ -458,32 +498,45 @@ class SDPParser(object):
             ids_a = torch.from_numpy(np.array(ids_a))
             fids_a, first_ids_a = get_first_ids(self.tokenizer, ids_a, align_type)
             heads_a, rels_a = self.predict(fids_a, ids_a)
-            #wid2wpid_list_a = first_ids_to_map(first_ids_a, [len(x) for x in input_ids_list_a])
             #print ("heads_a:\n", heads_a)
             #print ("rels_a:\n", rels_a)
             heads_b, rels_b = None, None
             if ids_b is not None:
                 fids_b, first_ids_b = get_first_ids(self.tokenizer, ids_b, align_type)
                 heads_b, rels_b = self.predict(fids_b, ids_b)
-                #wid2wpid_list_b = first_ids_to_map(first_ids_b, [len(x) for x in input_ids_list_b])
                 #print ("heads_b:\n", heads_b)
                 #print ("rels_b:\n", rels_b)
                 heads_b_list.extend(heads_b)
                 rels_b_list.extend(rels_b)
 
-            first_ids = merge_first_ids(self.tokenizer, inputs_, input_ids_list_a, first_ids_a, input_ids_list_b, first_ids_b)
+            heads_c, rels_c = None, None
+            if ids_c is not None:
+                fids_c, first_ids_c = get_first_ids(self.tokenizer, ids_c, align_type)
+                heads_c, rels_c = self.predict(fids_c, ids_c)
+                #print ("heads_c:\n", heads_c)
+                #print ("rels_c:\n", rels_c)
+                heads_c_list.extend(heads_c)
+                rels_c_list.extend(rels_c)
+
+            first_ids = merge_first_ids(self.tokenizer, inputs_, input_ids_list_a, first_ids_a, 
+                                        ids_b=input_ids_list_b, first_ids_b=first_ids_b,
+                                        ids_c=input_ids_list_c, first_ids_c=first_ids_c)
             first_ids_list.extend(first_ids)
             heads_a_list.extend(heads_a)
             rels_a_list.extend(rels_a)
         print ("")
-        heads, rels = self.align_heads(self.tokenizer, first_ids_list, lengths, heads_a_list, rels_a_list, heads_b_list, rels_b_list, 
-                        max_length=max_length, expand_type=expand_type)
+        heads, rels = self.align_heads(self.tokenizer, first_ids_list, lengths, heads_a_list, rels_a_list, 
+                                        heads_b=heads_b_list, rels_b=rels_b_list, 
+                                        heads_c=heads_c_list, rels_c=rels_c_list,
+                                        max_length=max_length, expand_type=expand_type,
+                                        max_num_choices=max_num_choices)
 
         return heads, rels
 
     def align_heads(self, tokenizer, first_ids_list, lengths, heads_a, rels_a, 
                     heads_b=None, rels_b=None,
-                    max_length=None, expand_type="copy", debug=False):
+                    heads_c=None, rels_c=None,
+                    max_length=None, expand_type="copy", max_num_choices=-1, debug=False):
         null_label = self.parser_label_map[self.null_label]
         word_label = self.parser_label_map[self.word_label]
 
@@ -493,6 +546,10 @@ class SDPParser(object):
         wid2wpid_list = first_ids_to_map(first_ids_list, lengths)
         #print ("first_ids_list:\n", first_ids_list)
         #print ("wid2wpid_list:\n", wid2wpid_list)
+        # this is for cases where max_num_choices > 0
+        num_in_list = 0
+        tmp_heads_list = []
+        tmp_rels_list = []
         for i in range(len(heads_a)):
             # the i-th example
             wid2wpid = wid2wpid_list[i]
@@ -502,9 +559,6 @@ class SDPParser(object):
                 print ("wid2wpid:\n",  wid2wpid_list[i])
                 print ("heads_a:\n", heads_a[i])
                 print ("rels_a:\n", rels_a[i])
-                if heads_b:
-                    print ("heads_b:\n", heads_b[i])
-                    print ("rels_b:\n", rels_b[i])
             
             heads = torch.zeros(max_length, max_length, dtype=torch.long)
             rels = torch.zeros(max_length, max_length, dtype=torch.long)
@@ -536,14 +590,65 @@ class SDPParser(object):
                             rels[mod_id][head_id] = label
                 if debug:
                     torch.set_printoptions(profile="full")
+                    if heads_b:
+                        print ("heads_b:\n", heads_b[i])
+                        print ("rels_b:\n", rels_b[i])
                     print ("offset:",offset)
                     print ("heads (end):\n", heads)
                     print ("rels (end):\n", rels)
-            heads_list.append(heads)
-            rels_list.append(rels)
 
-        heads = torch.stack(heads_list, dim=0)
-        rels = torch.stack(rels_list, dim=0)
+            if heads_c:
+                # here only 1 [SEP] in between, offset is (len_a-1) +1
+                offset = list(heads_a[i].size())[0] + list(heads_b[i].size())[0] #+ 1
+                arc_indices = torch.nonzero(heads_c[i], as_tuple=False).detach().cpu().numpy()
+                for x,y in arc_indices:
+                    label = rels_c[i][x][y]
+                    x = offset + x
+                    y = offset + y
+                    head_id = first_ids[y]
+                    mod_ids = wid2wpid[x]
+                    for mod_id in mod_ids:
+                        # ignore out of range arcs
+                        if mod_id < max_length and head_id < max_length:
+                            heads[mod_id][head_id] = 1
+                            rels[mod_id][head_id] = label
+                if debug:
+                    if heads_c:
+                        print ("heads_c:\n", heads_c[i])
+                        print ("rels_c:\n", rels_c[i])
+                    print ("offset:",offset)
+                    print ("heads (end):\n", heads)
+                    print ("rels (end):\n", rels)
+                    exit()
+            if max_num_choices > 0:
+                tmp_heads_list.append(heads.to_sparse())
+                tmp_rels_list.append(rels.to_sparse())
+                num_in_list += 1
+                if num_in_list == max_num_choices:
+                    heads_list.append(torch.stack(tmp_heads_list, dim=0))
+                    rels_list.append(torch.stack(tmp_rels_list, dim=0))
+                    tmp_heads_list = []
+                    tmp_rels_list = []
+                    num_in_list = 0
+            else:
+                heads_list.append(heads.to_sparse())
+                rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
+
+
+        if max_num_choices > 0:
+            # add the last group of examples
+            if tmp_heads_list:
+                heads_list.append(torch.stack(tmp_heads_list, dim=0))
+                rels_list.append(torch.stack(tmp_rels_list, dim=0))
+            # batch * (num_choices, seq_len, seq_len).to_sparse()
+            heads = heads_list
+            rels = rels_list
+        else:
+            heads = torch.stack(heads_list, dim=0)
+            rels = torch.stack(rels_list, dim=0)
 
         if debug:
             print ("heads:\n", heads)
