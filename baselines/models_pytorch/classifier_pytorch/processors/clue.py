@@ -36,6 +36,7 @@ def collate_fn(batch):
             all_rels = all_rels.to_dense()
         all_heads = all_heads[:, :max_len, :max_len]
         all_rels = all_rels[:, :max_len, :max_len]
+        torch.set_printoptions(profile="full")
     if num_items == 8:
         if all_dists.is_sparse:
             all_dists = all_dists.to_dense()

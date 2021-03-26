@@ -660,7 +660,7 @@ class SDPBiaffineParser(nn.Module):
             backoff_mask = torch.where(arc_preds.sum(-1).unsqueeze(2).expand_as(arc_preds)==0, torch.ones_like(arc_preds), torch.zeros_like(arc_preds))
             arc_preds = torch.where(backoff_mask==1, backoff_heads, arc_preds.int())
 
-        return arc_preds * mask_3D, type_preds
+        return (arc_preds * mask_3D).cpu(), type_preds.cpu()
 
 
     def get_probs(self, input_word, input_pretrained, input_char, input_pos, mask=None,
