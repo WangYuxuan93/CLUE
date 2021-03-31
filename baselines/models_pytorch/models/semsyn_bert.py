@@ -11,10 +11,11 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
-
 from transformers import PretrainedConfig, BertPreTrainedModel
 from transformers.modeling_bert import (BertAttention, BertIntermediate, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
+
+from models.gate import HighwayGateLayer
 
 import logging
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class SemSynBertConfig(PretrainedConfig):
         pad_token_id=0,
         gradient_checkpointing=False,
         num_labels=2,
+        fusion_type="joint",
         graph=None,
         **kwargs
     ):
@@ -61,10 +63,11 @@ class SemSynBertConfig(PretrainedConfig):
         self.num_labels = num_labels
 
         # GNN options
+        self.fusion_type = fusion_type
         self.graph = graph
 
 
-class BertSelfAttentionV2(nn.Module):
+class PalBertSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         if config.hidden_size % config.num_pal_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -73,7 +76,7 @@ class BertSelfAttentionV2(nn.Module):
                 "heads (%d)" % (config.hidden_size, config.num_pal_attention_heads)
             )
 
-        input_size = config.lowrank_size if config.do_pal_project else config.hidden_size
+        input_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
 
         self.num_pal_attention_heads = config.num_pal_attention_heads
         self.attention_head_size = int(input_size / config.num_pal_attention_heads)
@@ -144,31 +147,20 @@ class BertSelfAttentionV2(nn.Module):
         return outputs
 
 
-class IntermediateStructureAttentionLayer(nn.Module):
+class IntermediateGNNLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.attention = StructureAttentionLayer(config)
+        self.attention = GCNLayer(config)
 
-        self.do_pal_project = config.do_pal_project
-        if config.do_pal_project:
-            self.dense_down = nn.Linear(config.hidden_size, config.lowrank_size)
-            self.dense_up = nn.Linear(config.lowrank_size, config.hidden_size)
+        self.do_pal_project = config.graph["do_pal_project"]
+        if config.graph["do_pal_project"]:
+            self.dense_down = nn.Linear(config.hidden_size, config.graph["lowrank_size"])
+            self.dense_up = nn.Linear(config.graph["lowrank_size"], config.hidden_size)
 
         if isinstance(config.hidden_act, str):
             self.hidden_act_fn = ACT2FN[config.hidden_act]
         else:
             self.hidden_act_fn = config.hidden_act
-
-        self.insal_gate_type = config.insal_gate_type
-        if self.insal_gate_type == "scalar":
-            # no need to init
-            self.insal_pal_gate_scalar = nn.Parameter(torch.tensor(0.))
-
-    def task_gate_value(self):
-        if self.insal_gate_type == "scalar":
-            return nn.Sigmoid()(self.insal_pal_gate_scalar)
-        else:
-            return None
 
     def forward(
         self, 
@@ -188,65 +180,23 @@ class IntermediateStructureAttentionLayer(nn.Module):
 
         hidden_states = self.hidden_act_fn(hidden_states)
 
-        if self.insal_gate_type == "scalar":
-            alpha = nn.Sigmoid()(self.insal_pal_gate_scalar)
-        else:
-            alpha = None
-
-        return hidden_states, alpha
-
-
-class BertLowRank(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        #if not config.share_pal_project:
-        self.dense_down = nn.Linear(config.hidden_size, config.lowrank_size)
-        self.dense_up = nn.Linear(config.lowrank_size, config.hidden_size)
-        if isinstance(config.hidden_act, str):
-            self.hidden_act_fn = ACT2FN[config.hidden_act]
-        else:
-            self.hidden_act_fn = config.hidden_act
-
-    def forward(self, hidden_states):
-        hidden_states = self.dense_down(hidden_states)
-        hidden_states = self.hidden_act_fn(hidden_states)
-        hidden_states = self.dense_up(hidden_states)
         return hidden_states
 
 
-class StructureAttentionLayer(nn.Module):
+class GCNLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.use_other_parser = config.use_other_parser
-        self.use_self_weight = config.use_self_weight
-        self.use_rel_embedding = config.use_rel_embedding
-        self.use_dist = config.use_dist
-        assert self.use_other_parser is True
-        #self.arc_attention_head_size = config.arc_attention_head_size
-        input_size = config.lowrank_size if config.do_pal_project else config.hidden_size
-        output_size = config.lowrank_size if config.do_pal_project else config.hidden_size
-        self.arc_attention_mode = config.arc_attention_mode
+        self.use_self_weight = config.graph["use_self_weight"]
+        self.use_rel_embedding = config.graph["use_rel_embedding"]
+
+        input_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
+        output_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
+        self.data_flow = config.graph["data_flow"]
         self.adj_weight = nn.Linear(input_size, output_size)
         if self.use_self_weight:
             self.self_weight = nn.Linear(input_size, output_size)
-        if self.arc_attention_mode == "bidir":
+        if self.data_flow == "bidir":
             self.reverse_adj_weight = nn.Linear(input_size, output_size)
-
-        if self.use_rel_embedding:
-            self.rel_combine_type = config.rel_combine_type
-            self.use_reverse_rel_embed = config.use_reverse_rel_embed
-            self.use_reverse_rel_weight = config.use_reverse_rel_weight
-            if self.use_reverse_rel_embed:
-                self.num_base_rels = config.num_rel_labels // 2
-            self.rel_embeddings = nn.Embedding(config.num_rel_labels, config.rel_embed_size, padding_idx=0)
-            self.rel_weight = nn.Linear(config.rel_embed_size, output_size)
-            if self.use_reverse_rel_weight:
-                self.reverse_rel_weight = nn.Linear(config.rel_embed_size, output_size)
-            self.output = None
-            # if not projected we have to make the output back to hidden_size
-            if self.rel_combine_type=="concat" and not config.do_pal_project:
-                self.output = nn.Linear(2*config.hidden_size, config.hidden_size)
-            self.dropout = nn.Dropout(config.arc_attention_probs_dropout_prob)
 
     def forward(
         self, 
@@ -264,12 +214,9 @@ class StructureAttentionLayer(nn.Module):
         # use the predicted heads from other parser
         adj_matrix = heads.float()
         # modifier to dependent, this cause multi-heads
-        if self.arc_attention_mode == "c2h":
+        if self.data_flow == "c2h":
             # remask pads at the end of each row because it's permuted
             adj_matrix = adj_matrix.permute(0,2,1)
-        # if use distance matrix, normalize them
-        if self.use_dist:
-            adj_matrix = adj_matrix / (1e-8+adj_matrix.sum(-1).unsqueeze(-1))
 
         if debug:
             torch.set_printoptions(profile="full")
@@ -277,108 +224,120 @@ class StructureAttentionLayer(nn.Module):
 
         # (batch, seq_len, output_size)
         context_layer = torch.matmul(adj_matrix, adj_layer)
-        if self.arc_attention_mode == "bidir":
+        if self.data_flow == "bidir":
             reverse_adj_layer = self.reverse_adj_weight(hidden_states)
             reverse_adj_matrix = adj_matrix.permute(0,2,1)
-            if self.use_dist:
-                reverse_adj_matrix = reverse_adj_matrix / (1e-8+reverse_adj_matrix.sum(-1).unsqueeze(-1))
             reverse_context_layer = torch.matmul(reverse_adj_matrix, reverse_adj_layer)
 
-        # do not divide when using distance matrix
-        if not self.use_dist:
-            # divide by the number of neighbors
-            # (batch, seq_len)
-            num_neighbors = adj_matrix.sum(-1)
+
+        # divide by the number of neighbors
+        # (batch, seq_len)
+        num_neighbors = adj_matrix.sum(-1)
+        ones = torch.ones_like(num_neighbors, device=context_layer.device)
+        num_neighbors = torch.where(num_neighbors>0,num_neighbors,ones)
+        if debug:
+            print ("num_neighbors:\n", num_neighbors)
+        # divide by the number of neighbors
+        context_layer = context_layer / num_neighbors.unsqueeze(-1)
+        if self.data_flow == "bidir":
+            num_neighbors = reverse_adj_matrix.sum(-1)
             ones = torch.ones_like(num_neighbors, device=context_layer.device)
             num_neighbors = torch.where(num_neighbors>0,num_neighbors,ones)
-            if debug:
-                print ("num_neighbors:\n", num_neighbors)
             # divide by the number of neighbors
-            context_layer = context_layer / num_neighbors.unsqueeze(-1)
-        if self.arc_attention_mode == "bidir":
-            # do not divide when using distance matrix
-            if not self.use_dist:
-                num_neighbors = reverse_adj_matrix.sum(-1)
-                ones = torch.ones_like(num_neighbors, device=context_layer.device)
-                num_neighbors = torch.where(num_neighbors>0,num_neighbors,ones)
-                # divide by the number of neighbors
-                reverse_context_layer = reverse_context_layer / num_neighbors.unsqueeze(-1)
+            reverse_context_layer = reverse_context_layer / num_neighbors.unsqueeze(-1)
             context_layer = context_layer + reverse_context_layer
 
         if self.use_self_weight:
             self_layer = self.self_weight(hidden_states)
             context_layer = self_layer + context_layer
 
-        if self.use_rel_embedding:
-            # (batch, seq_len, seq_len, rel_embed_size)
-            rel_embeds = self.rel_embeddings(rels)
-            rel_embeds = self.dropout(rel_embeds)
-            # (batch, seq_len, seq_len, output_size)
-            # mask out rels with no arc
-            rel_layer = self.rel_weight(rel_embeds) * adj_matrix.unsqueeze(-1)
-            # (batch, seq_len, output_size)
-            rel_layer = rel_layer.sum(-2)
-            if self.use_reverse_rel_embed:
-                zeros = torch.zeros_like(rels, dtype=torch.long, device=rels.device)
-                reverse_rels = rels.permute(0,2,1) + self.num_base_rels
-                reverse_rels = torch.where(reverse_rels>self.num_base_rels, reverse_rels, zeros)
-                reverse_rel_embeds = self.rel_embeddings(reverse_rels)
-                reverse_rel_embeds = self.dropout(reverse_rel_embeds)
-                reverse_adj_matrix = adj_matrix.permute(0,2,1)
-                #print ("reverse_rels:\n", reverse_rels)
-                if self.use_reverse_rel_weight:
-                    # mask out rels with no arc
-                    reverse_rel_layer = self.reverse_rel_weight(reverse_rel_embeds) * reverse_adj_matrix.unsqueeze(-1)
-                else:
-                    reverse_rel_layer = self.rel_weight(reverse_rel_embeds) * reverse_adj_matrix.unsqueeze(-1)
-                # (batch, seq_len, output_size)
-                reverse_rel_layer = reverse_rel_layer.sum(-2)
-                rel_layer = rel_layer + reverse_rel_layer
-
-            
-            if self.rel_combine_type=="concat":
-                # (batch, seq_len, 2*output_size)
-                context_layer = torch.cat([context_layer,rel_layer], dim=-1)
-                if self.output is not None:
-                    # (batch, seq_len, hidden_size)
-                    context_layer = self.output(context_layer)
-            else: #self.rel_combine_type=="add":
-                context_layer = context_layer + rel_layer
-
-        # context_layer = [self_layer] + adj_layer + [rev_adj_layer] + [rel_layer + [rev_rel_layer]]
+        # context_layer = [self_layer] + adj_layer + [rev_adj_layer]
         return context_layer
 
 
-class BertPals(nn.Module):
+class ResidualGNNLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.do_pal_project = config.do_pal_project
-        self.use_biaffine_attention = config.use_biaffine_attention
-        self.use_rgcn = config.use_rgcn
-        self.use_structure_attention_layer = config.use_structure_attention_layer
-        self.share_aug_all = config.aug_type == "pal" and config.share_pal_project and config.share_pal_attention
+        self.do_pal_project = config.graph["do_pal_project"]
+        self.encoder_type = config.graph["encoder"]
         
         if isinstance(config.hidden_act, str):
             self.hidden_act_fn = ACT2FN[config.hidden_act]
         else:
             self.hidden_act_fn = config.hidden_act
 
-        if config.do_pal_project:
-            if self.share_aug_all or not config.share_pal_project:
-                self.dense_down = nn.Linear(config.hidden_size, config.lowrank_size)
-                output_size = 2*config.lowrank_size if (config.use_rel_embedding and config.rel_combine_type=="concat") else config.lowrank_size
-                self.dense_up = nn.Linear(output_size, config.hidden_size)
+        if config.graph["do_pal_project"]:
+            self.dense_down = nn.Linear(config.hidden_size, config.graph["lowrank_size"])
+            #output_size = 2*config.graph["lowrank_size"] if (config.graph["use_rel_embedding"] and config.rel_combine_type=="concat") else config.graph["lowrank_size"]
+            output_size = config.graph["lowrank_size"]
+            self.dense_up = nn.Linear(output_size, config.hidden_size)
         
-        if config.use_rgcn:
-            self.attention = RGCN(config)
-        elif config.use_structure_attention_layer:
-            self.attention = StructureAttentionLayer(config)
-        elif config.use_biaffine_attention:
-            self.attention = BiaffineArcAttentionV2(config)
-        else:
-            self.attention = BertSelfAttentionV2(config)
+        if self.encoder_type == "GCN":
+            self.attention = GCNLayer(config)
+        elif self.encoder_type == "ATT": # vanilla attention
+            self.attention = PalBertSelfAttention(config)
+        elif self.encoder_type == "LIN": # linear 
+            self.attention = None
 
-        self.pal_gate_type = config.pal_gate_type
+
+    def forward(
+        self, 
+        hidden_states, 
+        attention_mask=None, 
+        heads=None, 
+        rels=None,
+    ):
+        if self.do_pal_project:
+            hidden_states = self.dense_down(hidden_states)
+        if self.encoder_type == "GCN":
+            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
+        elif self.encoder_type == "ATT":
+            hidden_states = self.attention(hidden_states, attention_mask)
+        elif self.encoder_type == "LIN":
+            # for linear we add act in between
+            hidden_states = self.hidden_act_fn(hidden_states)
+        
+        if self.do_pal_project:
+            hidden_states = self.dense_up(hidden_states)
+        if self.encoder_type != "LIN":
+            hidden_states = self.hidden_act_fn(hidden_states)
+        
+        return hidden_states
+
+
+class ResidualBertOutput(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.use_fusion_gate = config.graph["use_fusion_gate"]
+        if self.use_fusion_gate:
+            self.gate = eval(config.graph["residual_fusion_gate"])(config.hidden_size)
+
+    def forward(self, hidden_states, input_tensor, res_layer):
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        if self.use_fusion_gate:
+            hidden_states = self.gate(hidden_states + input_tensor, res_layer)
+        else:
+            hidden_states = hidden_states + input_tensor + res_layer
+        hidden_states = self.LayerNorm(hidden_states)
+        return hidden_states
+
+
+class ResidualGNNBertLayer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.chunk_size_feed_forward = config.chunk_size_feed_forward
+        self.seq_len_dim = 1
+        self.attention = BertAttention(config)
+        self.intermediate = BertIntermediate(config)
+        self.output = ResidualBertOutput(config)
+
+        self.fusion_type = config.fusion_type
+        self.res_layer = ResidualGNNLayer(config)
+        """
         if self.pal_gate_type == "scalar":
             # no need to init
             self.pal_gate_scalar = nn.Parameter(torch.tensor(0.))
@@ -387,7 +346,8 @@ class BertPals(nn.Module):
             self.pal_gate_dense = nn.Linear(config.task_embed_size, 1)
         elif self.pal_gate_type == "input":
             self.pal_gate_dense = nn.Linear(config.hidden_size, 1, bias=False)
-
+        """
+    """
     def task_gate_value(self, task_embed=None):
         if self.pal_gate_type == "scalar":   
             return nn.Sigmoid()(self.pal_gate_scalar)
@@ -396,78 +356,7 @@ class BertPals(nn.Module):
             return nn.Sigmoid()(self.pal_gate_dense(task_embed))
         else:
             return None
-
-    def forward(
-        self, 
-        hidden_states, 
-        attention_mask=None, 
-        heads=None, 
-        rels=None,
-        task_embed=None,
-    ):
-        if self.do_pal_project:
-            hidden_states = self.dense_down(hidden_states)
-        if self.use_rgcn:
-            hidden_states = self.attention(hidden_states, rels, attention_mask)
-        elif self.use_structure_attention_layer:
-            outputs = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
-            hidden_states = outputs
-        elif self.use_biaffine_attention:
-            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
-        else:
-            hidden_states = self.attention(hidden_states, attention_mask)
-        if self.do_pal_project:
-            hidden_states = self.dense_up(hidden_states)
-        hidden_states = self.hidden_act_fn(hidden_states)
-        
-        alpha = None
-        if self.pal_gate_type == "scalar":
-            #hidden_states = nn.Sigmoid()(self.pal_gate_scalar) * hidden_states
-            alpha = nn.Sigmoid()(self.pal_gate_scalar)
-        elif self.pal_gate_type == "task":
-            alpha = nn.Sigmoid()(self.pal_gate_dense(task_embed))
-            #hidden_states = alpha * hidden_states
-        elif self.pal_gate_type == "input":
-            # (batch, seq_len, 1)
-            alpha = nn.Sigmoid()(self.pal_gate_dense(hidden_states))
-            #hidden_states = alpha * hidden_states
-        
-        return (hidden_states, alpha)
-
-
-class BertV2Output(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-    def forward(self, hidden_states, input_tensor, aug_layer, alpha=None):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        if alpha is None:
-            hidden_states = hidden_states + input_tensor + aug_layer
-        else:
-            hidden_states = (1-alpha)*(hidden_states + input_tensor) + alpha*aug_layer
-        hidden_states = self.LayerNorm(hidden_states)
-        return hidden_states
-
-
-class SemSynBertLayer(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.chunk_size_feed_forward = config.chunk_size_feed_forward
-        self.seq_len_dim = 1
-        self.attention = BertAttention(config)
-        self.intermediate = BertIntermediate(config)
-        self.output = BertV2Output(config)
-
-        self.aug_type = config.aug_type
-        self.share_aug_all = config.share_pal_project and config.share_pal_attention
-        if self.aug_type == "lowrank":
-            self.aug_layer = BertLowRank(config)
-        elif self.aug_type == "pal" and not self.share_aug_all:
-            self.aug_layer = BertPals(config)
+    """
 
     def forward(
         self,
@@ -477,11 +366,8 @@ class SemSynBertLayer(nn.Module):
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         output_attentions=True,
-        aug_output=None,
         heads=None,
         rels=None,
-        task_embed=None,
-        alpha=None,
     ):
         self_attention_outputs = self.attention(
             hidden_states,
@@ -492,18 +378,10 @@ class SemSynBertLayer(nn.Module):
         attention_output = self_attention_outputs[0]
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
-        if aug_output is None:
-            if self.aug_type == "lowrank":
-                aug_output = self.aug_layer(hidden_states)
-            elif self.aug_type == "pal" and not self.share_aug_all:
-                aug_output, alpha_ = self.aug_layer(hidden_states, attention_mask, heads, rels, task_embed)
-            else:
-                raise ValueError("aug_output is not provided or calculated")
-            # if input alpha is not None use the input one (for type=share_scalar)
-            alpha = alpha if alpha is not None else alpha_
+        res_output = self.res_layer(hidden_states, attention_mask, heads, rels)
         
         intermediate_output = self.intermediate(attention_output)
-        layer_output = self.output(intermediate_output, attention_output, aug_output, alpha)
+        layer_output = self.output(intermediate_output, attention_output, res_output)
 
         outputs = (layer_output,) + outputs
         return outputs
@@ -513,75 +391,43 @@ class SemSynBertEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.pal_gate_type = config.pal_gate_type
-        self.aug_type = config.aug_type
-        self.structured_layers = config.structured_layers if config.structured_layers is not None else [i for i in range(config.num_hidden_layers)]
-        self.share_pal_project = config.share_pal_project
-        self.share_pal_attention = config.share_pal_attention
-        self.use_biaffine_attention = config.aug_type == "pal" and config.use_biaffine_attention
+        self.fusion_type = config.graph["fusion_type"]
+        self.structured_layers = config.graph["structured_layers"] if config.graph["structured_layers"] is not None else [i for i in range(config.num_hidden_layers)]
 
-        self.task_embed = None
-        if self.aug_type == "pal":
-            if self.pal_gate_type == "task":
-                self.task_embed = nn.Parameter(torch.Tensor(config.task_embed_size))
-                nn.init.uniform_(self.task_embed)
-            elif self.pal_gate_type == "share-scalar":
-                self.pal_gate_scalar = nn.Parameter(torch.tensor(0.))
-
-        # share all components in aug_layer
-        self.share_aug_all = config.aug_type == "pal" and config.share_pal_project and config.share_pal_attention
-        if self.aug_type == "insal":
+        if self.fusion_type in ["inter", "top"]:
             self.layer = nn.ModuleList([BertLayer(config) for i in range(config.num_hidden_layers)])
-        else:
-            self.layer = nn.ModuleList([SemSynBertLayer(config) if i in self.structured_layers
+        elif self.fusion_type == "residual":
+            self.layer = nn.ModuleList([ResidualGNNBertLayer(config) if i in self.structured_layers
                                     else BertLayer(config) for i in range(config.num_hidden_layers)])
-        if not self.share_aug_all and self.share_pal_project:
-            self.dense_down = nn.Linear(config.hidden_size, config.lowrank_size)
-            self.dense_up = nn.Linear(config.lowrank_size, config.hidden_size)
-            for i, layer_module in enumerate(self.layer):
-                if i not in self.structured_layers: continue
-                layer_module.aug_layer.dense_down = self.dense_down
-                layer_module.aug_layer.dense_up = self.dense_up
-        if config.aug_type == "pal":
-            if self.share_aug_all:
-                self.aug_layer = BertPals(config)
-            elif self.share_pal_attention:
-                if config.use_biaffine_attention:
-                    self.attention = BiaffineArcAttentionV2(config)
-                else:
-                    self.attention = BertSelfAttentionV2(config)
-                for i, layer_module in enumerate(self.layer):
-                    if i not in self.structured_layers: continue
-                    layer_module.aug_layer.attention = self.attention
 
-        self.insal_layers = None
-        if self.aug_type == "insal":
-            self.insal_layers = nn.ModuleList([IntermediateStructureAttentionLayer(config) if i in self.structured_layers
+        self.inter_gnn_layers = None
+        if self.fusion_type == "inter":
+            self.inter_gnn_layers = nn.ModuleList([IntermediateGNNLayer(config) if i in self.structured_layers
                                     else None for i in range(config.num_hidden_layers)])
-            self.insal_gate_type = config.insal_gate_type
-            self.insal_pal_gate_scalar = None
-            if config.insal_gate_type == "share-scalar":
-                self.insal_pal_gate_scalar = nn.Parameter(torch.tensor(0.))
+            self.use_fusion_gate = config.graph["use_fusion_gate"]
+            if self.use_fusion_gate:
+                self.gate = eval(config.graph["inter_fusion_gate"])(config.hidden_size)
 
-
+    """
     def task_gate_values(self):
         if not ((self.aug_type == "pal" and self.pal_gate_type in ["scalar","share-scalar","task"]
-            ) or (self.aug_type == "insal" and self.insal_gate_type in ["scalar","share-scalar"])):
+            ) or (self.aug_type == "inter_gnn" and self.inter_gnn_gate_type in ["scalar","share-scalar"])):
             return None
         vals = []
-        if self.aug_type == "insal" and self.insal_gate_type == "share-scalar":
-            return float(nn.Sigmoid()(self.insal_pal_gate_scalar).detach().cpu().numpy())
+        if self.aug_type == "inter_gnn" and self.inter_gnn_gate_type == "share-scalar":
+            return float(nn.Sigmoid()(self.inter_gnn_pal_gate_scalar).detach().cpu().numpy())
         if self.aug_type == "pal" and self.pal_gate_type == "share-scalar":
             return float(nn.Sigmoid()(self.pal_gate_scalar).detach().cpu().numpy())
             #return float(self.pal_gate_scalar.detach().cpu().numpy())
         for i, layer in enumerate(self.layer):
             if i in self.structured_layers:
                 if self.aug_type == "pal":
-                    vals.append(float(layer.aug_layer.task_gate_value(self.task_embed).detach().cpu().numpy()))
-                elif self.aug_type == "insal":
-                    vals.append(float(self.insal_layers[i].task_gate_value().detach().cpu().numpy()))
+                    vals.append(float(layer.res_layer.task_gate_value(self.task_embed).detach().cpu().numpy()))
+                elif self.aug_type == "inter_gnn":
+                    vals.append(float(self.inter_gnn_layers[i].task_gate_value().detach().cpu().numpy()))
 
         return vals
+    """
 
     def forward(
         self,
@@ -598,7 +444,6 @@ class SemSynBertEncoder(nn.Module):
     ):
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
-        aug_output = None
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -622,13 +467,7 @@ class SemSynBertEncoder(nn.Module):
                     encoder_attention_mask,
                 )
             else:
-                if self.aug_type != "insal" and i in self.structured_layers:
-                    if self.share_aug_all:
-                        aug_output = self.aug_layer(hidden_states, attention_mask)
-                    alpha = None
-                    if self.aug_type == "pal" and self.pal_gate_type == "share-scalar":
-                        alpha = nn.Sigmoid()(self.pal_gate_scalar)
-
+                if self.fusion_type != "inter" and i in self.structured_layers:
                     layer_outputs = layer_module(
                         hidden_states,
                         attention_mask,
@@ -636,11 +475,8 @@ class SemSynBertEncoder(nn.Module):
                         encoder_hidden_states,
                         encoder_attention_mask,
                         output_attentions,
-                        aug_output,
                         heads,
-                        rels,
-                        self.task_embed,
-                        alpha,
+                        rels
                     )
                 else:
                     layer_outputs = layer_module(
@@ -653,20 +489,17 @@ class SemSynBertEncoder(nn.Module):
                     )
             hidden_states = layer_outputs[0]
 
-            if i in self.structured_layers:
-                if self.aug_type == "insal":
-                    context_layer, alpha = self.insal_layers[i](
-                        hidden_states,
-                        attention_mask,
-                        heads,
-                        rels,
-                    )
-                    if self.insal_gate_type == "share-scalar":
-                        alpha = nn.Sigmoid()(self.insal_pal_gate_scalar)
-                    if alpha is not None:
-                        hidden_states = (1-alpha)*hidden_states + alpha*context_layer
-                    else:
-                        hidden_states = 0.5*(hidden_states + context_layer)
+            if self.fusion_type == "inter" and i in self.structured_layers:
+                inter_hidden_states = self.inter_gnn_layers[i](
+                    hidden_states,
+                    attention_mask,
+                    heads,
+                    rels,
+                )
+                if self.use_fusion_gate:
+                    hidden_states = self.gate(hidden_states, inter_hidden_states)
+                else:
+                    hidden_states = 0.5*(hidden_states + inter_hidden_states)
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
