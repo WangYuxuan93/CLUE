@@ -36,8 +36,7 @@ from tools.progressbar import ProgressBar
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
-from transformers import StructuredBertV2Config, StructuredBertV2ForSequenceClassification
-from models.semsyn_bert import SemSynBertConfig
+from models.semsyn_bert import SemSynBertConfig, SemSynBertForSequenceClassification
 import shutil
 import re
 from pathlib import Path
@@ -556,7 +555,6 @@ def main():
     parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","pkuseg","rule"], help="Policy to align subwords in parser")
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
-    parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
 
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,
@@ -676,28 +674,20 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    config = SemSynBertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
-    print (config.graph['structured_layers'])
-    exit()
-
     if args.parser_model is not None:
-        config = StructuredBertV2Config.from_pretrained(
+        config = SemSynBertConfig.from_pretrained(
                         args.config_name if args.config_name else args.model_name_or_path)
         config.num_labels=num_labels
 
         tokenizer = BertTokenizer.from_pretrained(
                         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path)
-        config.use_reverse_rel = args.parser_use_reverse_label
         label_path = os.path.join(args.parser_model, "alphabets/type.json")
         parser_label2id = load_labels_from_json(label_path)
-        parser_label_embed_size = len(parser_label2id)
-        if args.parser_use_reverse_label:
-            parser_label_embed_size *= 2
-        config.num_rel_labels = parser_label_embed_size
+        config.graph["num_rel_labels"] = len(parser_label2id)
         
-        model = StructuredBertV2ForSequenceClassification.from_pretrained(
+        model = SemSynBertForSequenceClassification.from_pretrained(
                         args.model_name_or_path, config=config)
-        model_class = StructuredBertV2ForSequenceClassification
+        model_class = SemSynBertForSequenceClassification
         tokenizer_class = BertTokenizer
     else:
         args.model_type = args.model_type.lower()

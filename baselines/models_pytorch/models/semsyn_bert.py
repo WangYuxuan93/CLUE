@@ -12,10 +12,12 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
 from transformers import PretrainedConfig, BertPreTrainedModel
-from transformers.modeling_bert import (BertAttention, BertIntermediate, BertLayer, BertPooler)
+from transformers.modeling_bert import (BertEmbeddings, BertAttention, BertIntermediate, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
 from models.gate import HighwayGateLayer
+from models.graph_convolution import GCNLayer, RGCNLayer
+from models.graph_attention import GATLayer
 
 import logging
 logger = logging.getLogger(__name__)
@@ -70,17 +72,17 @@ class SemSynBertConfig(PretrainedConfig):
 class PalBertSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        if config.hidden_size % config.num_pal_attention_heads != 0 and not hasattr(config, "embedding_size"):
+        if config.hidden_size % config.graph["num_attention_heads"] != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
                 "The hidden size (%d) is not a multiple of the number of attention "
-                "heads (%d)" % (config.hidden_size, config.num_pal_attention_heads)
+                "heads (%d)" % (config.hidden_size, config.graph["num_attention_heads"])
             )
 
         input_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
 
-        self.num_pal_attention_heads = config.num_pal_attention_heads
-        self.attention_head_size = int(input_size / config.num_pal_attention_heads)
-        self.all_head_size = self.num_pal_attention_heads * self.attention_head_size
+        self.num_attention_heads = config.graph["num_attention_heads"]
+        self.attention_head_size = int(input_size / config.graph["num_attention_heads"])
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
 
         self.query = nn.Linear(input_size, self.all_head_size)
         self.key = nn.Linear(input_size, self.all_head_size)
@@ -89,7 +91,7 @@ class PalBertSelfAttention(nn.Module):
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
     def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_pal_attention_heads, self.attention_head_size)
+        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
@@ -147,115 +149,7 @@ class PalBertSelfAttention(nn.Module):
         return outputs
 
 
-class IntermediateGNNLayer(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.attention = GCNLayer(config)
-
-        self.do_pal_project = config.graph["do_pal_project"]
-        if config.graph["do_pal_project"]:
-            self.dense_down = nn.Linear(config.hidden_size, config.graph["lowrank_size"])
-            self.dense_up = nn.Linear(config.graph["lowrank_size"], config.hidden_size)
-
-        if isinstance(config.hidden_act, str):
-            self.hidden_act_fn = ACT2FN[config.hidden_act]
-        else:
-            self.hidden_act_fn = config.hidden_act
-
-    def forward(
-        self, 
-        hidden_states,
-        attention_mask=None,
-        heads=None,
-        rels=None,
-        debug=False,
-    ):
-        if self.do_pal_project:
-            hidden_states = self.dense_down(hidden_states)
-        
-        hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
-
-        if self.do_pal_project:
-            hidden_states = self.dense_up(hidden_states)
-
-        hidden_states = self.hidden_act_fn(hidden_states)
-
-        return hidden_states
-
-
-class GCNLayer(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.use_self_weight = config.graph["use_self_weight"]
-        self.use_rel_embedding = config.graph["use_rel_embedding"]
-
-        input_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
-        output_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
-        self.data_flow = config.graph["data_flow"]
-        self.adj_weight = nn.Linear(input_size, output_size)
-        if self.use_self_weight:
-            self.self_weight = nn.Linear(input_size, output_size)
-        if self.data_flow == "bidir":
-            self.reverse_adj_weight = nn.Linear(input_size, output_size)
-
-    def forward(
-        self, 
-        hidden_states,
-        attention_mask=None,
-        heads=None,
-        rels=None,
-        debug=False,
-    ):
-        
-        # (batch, seq_len, arc_att_head_size)
-        adj_layer = self.adj_weight(hidden_states)
-
-        # (batch, seq_len, seq_len)
-        # use the predicted heads from other parser
-        adj_matrix = heads.float()
-        # modifier to dependent, this cause multi-heads
-        if self.data_flow == "c2h":
-            # remask pads at the end of each row because it's permuted
-            adj_matrix = adj_matrix.permute(0,2,1)
-
-        if debug:
-            torch.set_printoptions(profile="full")
-            print ("adj_matrix:\n", adj_matrix)
-
-        # (batch, seq_len, output_size)
-        context_layer = torch.matmul(adj_matrix, adj_layer)
-        if self.data_flow == "bidir":
-            reverse_adj_layer = self.reverse_adj_weight(hidden_states)
-            reverse_adj_matrix = adj_matrix.permute(0,2,1)
-            reverse_context_layer = torch.matmul(reverse_adj_matrix, reverse_adj_layer)
-
-
-        # divide by the number of neighbors
-        # (batch, seq_len)
-        num_neighbors = adj_matrix.sum(-1)
-        ones = torch.ones_like(num_neighbors, device=context_layer.device)
-        num_neighbors = torch.where(num_neighbors>0,num_neighbors,ones)
-        if debug:
-            print ("num_neighbors:\n", num_neighbors)
-        # divide by the number of neighbors
-        context_layer = context_layer / num_neighbors.unsqueeze(-1)
-        if self.data_flow == "bidir":
-            num_neighbors = reverse_adj_matrix.sum(-1)
-            ones = torch.ones_like(num_neighbors, device=context_layer.device)
-            num_neighbors = torch.where(num_neighbors>0,num_neighbors,ones)
-            # divide by the number of neighbors
-            reverse_context_layer = reverse_context_layer / num_neighbors.unsqueeze(-1)
-            context_layer = context_layer + reverse_context_layer
-
-        if self.use_self_weight:
-            self_layer = self.self_weight(hidden_states)
-            context_layer = self_layer + context_layer
-
-        # context_layer = [self_layer] + adj_layer + [rev_adj_layer]
-        return context_layer
-
-
-class ResidualGNNLayer(nn.Module):
+class PalGNNLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.do_pal_project = config.graph["do_pal_project"]
@@ -274,6 +168,10 @@ class ResidualGNNLayer(nn.Module):
         
         if self.encoder_type == "GCN":
             self.attention = GCNLayer(config)
+        elif self.encoder_type == "RGCN":
+            self.attention = RGCNLayer(config)
+        elif self.encoder_type == "GAT":
+            self.attention = GATLayer(config)
         elif self.encoder_type == "ATT": # vanilla attention
             self.attention = PalBertSelfAttention(config)
         elif self.encoder_type == "LIN": # linear 
@@ -291,8 +189,12 @@ class ResidualGNNLayer(nn.Module):
             hidden_states = self.dense_down(hidden_states)
         if self.encoder_type == "GCN":
             hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
+        elif self.encoder_type == "RGCN":
+            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
+        elif self.encoder_type == "GAT":
+            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
         elif self.encoder_type == "ATT":
-            hidden_states = self.attention(hidden_states, attention_mask)
+            hidden_states = self.attention(hidden_states, attention_mask)[0]
         elif self.encoder_type == "LIN":
             # for linear we add act in between
             hidden_states = self.hidden_act_fn(hidden_states)
@@ -313,7 +215,7 @@ class ResidualBertOutput(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.use_fusion_gate = config.graph["use_fusion_gate"]
         if self.use_fusion_gate:
-            self.gate = eval(config.graph["residual_fusion_gate"])(config.hidden_size)
+            self.gate = eval(config.graph["fusion_gate"])(config.hidden_size)
 
     def forward(self, hidden_states, input_tensor, res_layer):
         hidden_states = self.dense(hidden_states)
@@ -336,7 +238,7 @@ class ResidualGNNBertLayer(nn.Module):
         self.output = ResidualBertOutput(config)
 
         self.fusion_type = config.fusion_type
-        self.res_layer = ResidualGNNLayer(config)
+        self.res_layer = PalGNNLayer(config)
         """
         if self.pal_gate_type == "scalar":
             # no need to init
@@ -391,8 +293,11 @@ class SemSynBertEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.fusion_type = config.graph["fusion_type"]
+        self.graph_encoder = config.graph["encoder"]
+        self.fusion_type = config.fusion_type
         self.structured_layers = config.graph["structured_layers"] if config.graph["structured_layers"] is not None else [i for i in range(config.num_hidden_layers)]
+        self.use_rel_embedding = self.graph_encoder != "RGCN" and config.graph["use_rel_embedding"]
+        self.data_flow = config.graph["data_flow"]
 
         if self.fusion_type in ["inter", "top"]:
             self.layer = nn.ModuleList([BertLayer(config) for i in range(config.num_hidden_layers)])
@@ -402,32 +307,36 @@ class SemSynBertEncoder(nn.Module):
 
         self.inter_gnn_layers = None
         if self.fusion_type == "inter":
-            self.inter_gnn_layers = nn.ModuleList([IntermediateGNNLayer(config) if i in self.structured_layers
+            self.inter_gnn_layers = nn.ModuleList([PalGNNLayer(config) if i in self.structured_layers
                                     else None for i in range(config.num_hidden_layers)])
             self.use_fusion_gate = config.graph["use_fusion_gate"]
             if self.use_fusion_gate:
-                self.gate = eval(config.graph["inter_fusion_gate"])(config.hidden_size)
+                self.gates = nn.ModuleList([eval(config.graph["fusion_gate"])(config.hidden_size) if i in self.structured_layers
+                                    else None for i in range(config.num_hidden_layers)])
 
-    """
-    def task_gate_values(self):
-        if not ((self.aug_type == "pal" and self.pal_gate_type in ["scalar","share-scalar","task"]
-            ) or (self.aug_type == "inter_gnn" and self.inter_gnn_gate_type in ["scalar","share-scalar"])):
-            return None
-        vals = []
-        if self.aug_type == "inter_gnn" and self.inter_gnn_gate_type == "share-scalar":
-            return float(nn.Sigmoid()(self.inter_gnn_pal_gate_scalar).detach().cpu().numpy())
-        if self.aug_type == "pal" and self.pal_gate_type == "share-scalar":
-            return float(nn.Sigmoid()(self.pal_gate_scalar).detach().cpu().numpy())
-            #return float(self.pal_gate_scalar.detach().cpu().numpy())
-        for i, layer in enumerate(self.layer):
-            if i in self.structured_layers:
-                if self.aug_type == "pal":
-                    vals.append(float(layer.res_layer.task_gate_value(self.task_embed).detach().cpu().numpy()))
-                elif self.aug_type == "inter_gnn":
-                    vals.append(float(self.inter_gnn_layers[i].task_gate_value().detach().cpu().numpy()))
+        if self.use_rel_embedding:
+            if self.graph_encoder == "GAT":
+                # should have same size as one attention head
+                in_out_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
+                config.graph["rel_embed_size"] = int(in_out_size / config.graph["num_attention_heads"])
+            self.num_rel_labels = config.graph["num_rel_labels"]
+            self.num_all_rel_labels = self.num_rel_labels * 2 if self.data_flow == "bidir" else self.num_rel_labels
+            self.rel_embeddings = nn.Embedding(self.num_all_rel_labels, config.graph["rel_embed_size"], padding_idx=0)
+            self.rel_dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        return vals
-    """
+        self.show_info()
+
+    def show_info(self):
+        logger.info("###### SemSynBERT Encoder ######")
+        logger.info("graph_encoder = {}, fusion_type = {}".format(self.graph_encoder, self.fusion_type))
+        logger.info("data_flow = {}, structured_layers = {}".format(self.data_flow, self.structured_layers))
+        logger.info("lowrank_size = {} (hidden = {}), num_attention_heads = {}".format(self.config.graph["lowrank_size"] if self.config.graph["do_pal_project"] else "N/A",
+                                                self.config.hidden_size, self.config.graph["num_attention_heads"] if self.graph_encoder in ["GAT","ATT"] else "N/A"))
+        logger.info("data_flow_gate = {}".format(self.config.graph["data_flow_gate"] if self.config.graph["use_data_flow_gate"] 
+                                                    and self.graph_encoder=="GCN" else "N/A"))
+        logger.info("fusion_gate = {}".format(self.config.graph["fusion_gate"] if self.config.graph["use_fusion_gate"] else "N/A"))
+        logger.info("rel_embed_size = {}, num_basic_matrix = {}".format(self.config.graph["rel_embed_size"] if self.use_rel_embedding and self.graph_encoder!="RGCN" else "N/A",
+                                                self.config.graph["num_basic_matrix"] if self.graph_encoder=="RGCN" else "N/A"))
 
     def forward(
         self,
@@ -444,6 +353,34 @@ class SemSynBertEncoder(nn.Module):
     ):
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
+
+        # preprocess
+        # convert rels to embedding
+        if self.use_rel_embedding:
+            if self.data_flow == "c2h":
+                # do not need to add offset since no h2c label
+                rels = rels.permute(0,2,1)
+            if self.data_flow == "bidir":
+                zeros = torch.zeros_like(rels, dtype=torch.long, device=rels.device)
+                reverse_rels = rels.permute(0,2,1) + self.num_rel_labels
+                reverse_rels = torch.where(reverse_rels>self.num_rel_labels, reverse_rels, zeros)
+                rels = self.rel_embeddings(rels) + self.rel_embeddings(reverse_rels)
+            else:
+                rels = self.rel_embeddings(rels)
+            rels = self.rel_dropout(rels)
+
+        # convert heads to mask like format
+        if self.graph_encoder == "GAT":
+            if self.data_flow == "c2h":
+                heads = heads.permute(0, 2, 1)
+            elif self.data_flow == "bidir":
+                heads = heads + heads.permute(0, 2, 1)
+                # deal with entries == 2
+                heads = torch.where(heads>0, torch.ones_like(heads), torch.zeros_like(heads))
+            # (batch, 1, seq_len, seq_len), valid arc = 0, invalid arc = -10000.0
+            heads = heads.unsqueeze(1)
+            heads = (1.0 - heads) * -10000.0
+
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -497,7 +434,7 @@ class SemSynBertEncoder(nn.Module):
                     rels,
                 )
                 if self.use_fusion_gate:
-                    hidden_states = self.gate(hidden_states, inter_hidden_states)
+                    hidden_states = self.gates[i](hidden_states, inter_hidden_states)
                 else:
                     hidden_states = 0.5*(hidden_states + inter_hidden_states)
 
@@ -652,7 +589,6 @@ class SemSynBertForSequenceClassification(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.use_other_parser = config.use_other_parser
 
         self.bert = SemSynBertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -714,10 +650,6 @@ class SemSynBertForSequenceClassification(BertPreTrainedModel):
             else:
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-        
-        if self.use_other_parser:
-            output = (logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
 
         output = (logits,) + outputs[2:]
         return ((loss,) + output) if loss is not None else output

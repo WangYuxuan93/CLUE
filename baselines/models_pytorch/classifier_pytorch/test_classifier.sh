@@ -28,12 +28,13 @@ if [ $# == 0 ]; then
       --model_type=bert \
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
+      --parser_type=sdp \
       --parser_model=$PARSER_MODEL \
       --config_name=data/sbertv2.json \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
       --parser_return_tensor \
       --parser_align_type pkuseg \
-      --parser_expand_type copy-word \
+      --parser_expand_type copy \
       --do_train \
       --do_eval \
       --do_predict \
