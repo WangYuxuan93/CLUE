@@ -25,9 +25,9 @@
   "pooler_type": "first_token_transform",
   "type_vocab_size": 2,
   "vocab_size": 21128,
-  "fusion_type": "residual",
+  "fusion_type": "top",
   "graph": {
-    "encoder": "RGCN",
+    "encoder": "GCN",
     "structured_layers": [9,10,11],
     "data_flow": "bidir",
     "use_data_flow_gate": true,
@@ -36,11 +36,12 @@
     "num_rel_labels": 50,
     "do_pal_project": true,
     "lowrank_size": 128,
+    "num_layers": 3,
     "num_attention_heads": 4,
     "use_self_weight": true,
-    "use_fusion_gate": false,
+    "use_fusion_gate": true,
     "fusion_gate": "HighwayGateLayer",
-    "use_rel_embedding": false,
+    "use_rel_embedding": true,
     "rel_embed_size": 64,
     "num_basic_matrix": 3
   }

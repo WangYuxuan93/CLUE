@@ -18,6 +18,7 @@ from transformers.activations import ACT2FN
 from models.gate import HighwayGateLayer
 from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer
+from models.gnn_encoder import GNNEncoder
 
 import logging
 logger = logging.getLogger(__name__)
@@ -305,6 +306,9 @@ class SemSynBertEncoder(nn.Module):
             self.layer = nn.ModuleList([ResidualGNNBertLayer(config) if i in self.structured_layers
                                     else BertLayer(config) for i in range(config.num_hidden_layers)])
 
+        if self.fusion_type == "top":
+            self.gnn_encoder = GNNEncoder(config)
+
         self.inter_gnn_layers = None
         if self.fusion_type == "inter":
             self.inter_gnn_layers = nn.ModuleList([PalGNNLayer(config) if i in self.structured_layers
@@ -329,7 +333,9 @@ class SemSynBertEncoder(nn.Module):
     def show_info(self):
         logger.info("###### SemSynBERT Encoder ######")
         logger.info("graph_encoder = {}, fusion_type = {}".format(self.graph_encoder, self.fusion_type))
-        logger.info("data_flow = {}, structured_layers = {}".format(self.data_flow, self.structured_layers))
+        logger.info("data_flow = {}, top num_layers = {}, structured_layers = {}".format(self.data_flow, 
+                                                    self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A",
+                                                    self.structured_layers if self.fusion_type!="top" else "N/A"))
         logger.info("lowrank_size = {} (hidden = {}), num_attention_heads = {}".format(self.config.graph["lowrank_size"] if self.config.graph["do_pal_project"] else "N/A",
                                                 self.config.hidden_size, self.config.graph["num_attention_heads"] if self.graph_encoder in ["GAT","ATT"] else "N/A"))
         logger.info("data_flow_gate = {}".format(self.config.graph["data_flow_gate"] if self.config.graph["use_data_flow_gate"] 
@@ -404,7 +410,7 @@ class SemSynBertEncoder(nn.Module):
                     encoder_attention_mask,
                 )
             else:
-                if self.fusion_type != "inter" and i in self.structured_layers:
+                if self.fusion_type not in ["inter", "top"] and i in self.structured_layers:
                     layer_outputs = layer_module(
                         hidden_states,
                         attention_mask,
@@ -443,6 +449,9 @@ class SemSynBertEncoder(nn.Module):
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
+
+        if self.fusion_type == "top":
+            hidden_states = self.gnn_encoder(hidden_states, attention_mask, heads, rels)
 
         return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)
 
