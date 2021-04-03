@@ -1,6 +1,14 @@
 import torch
 import torch.nn as nn
 
+class ConstantGateLayer(nn.Module):
+    def __init__(self, fusion_gate_const=0.2):
+        super(ConstantGateLayer, self).__init__()
+        self.const = fusion_gate_const
+
+    def forward(self, x, y):
+        return (1 - self.const) * x + self.const * y
+
 
 class HighwayGateLayer(nn.Module):
     def __init__(self, in_out_size, bias=True):

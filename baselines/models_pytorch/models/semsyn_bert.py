@@ -15,7 +15,7 @@ from transformers import PretrainedConfig, BertPreTrainedModel
 from transformers.modeling_bert import (BertEmbeddings, BertAttention, BertIntermediate, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
-from models.gate import HighwayGateLayer
+from models.gate import HighwayGateLayer, ConstantGateLayer
 from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer
 from models.gnn_encoder import GNNEncoder
@@ -216,7 +216,10 @@ class ResidualBertOutput(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.use_fusion_gate = config.graph["use_fusion_gate"]
         if self.use_fusion_gate:
-            self.gate = eval(config.graph["fusion_gate"])(config.hidden_size)
+            if config.graph["fusion_gate"] == "ConstantGateLayer":
+                self.gate = ConstantGateLayer(config.graph["fusion_gate_const"])
+            else:
+                self.gate = eval(config.graph["fusion_gate"])(config.hidden_size)
 
     def forward(self, hidden_states, input_tensor, res_layer):
         hidden_states = self.dense(hidden_states)
@@ -315,7 +318,11 @@ class SemSynBertEncoder(nn.Module):
                                     else None for i in range(config.num_hidden_layers)])
             self.use_fusion_gate = config.graph["use_fusion_gate"]
             if self.use_fusion_gate:
-                self.gates = nn.ModuleList([eval(config.graph["fusion_gate"])(config.hidden_size) if i in self.structured_layers
+                if config.graph["fusion_gate"] == "ConstantGateLayer":
+                    self.gates = nn.ModuleList([ConstantGateLayer(config.graph["fusion_gate_const"]) if i in self.structured_layers
+                                    else None for i in range(config.num_hidden_layers)])
+                else:
+                    self.gates = nn.ModuleList([eval(config.graph["fusion_gate"])(config.hidden_size) if i in self.structured_layers
                                     else None for i in range(config.num_hidden_layers)])
 
         if self.use_rel_embedding:
@@ -340,7 +347,8 @@ class SemSynBertEncoder(nn.Module):
                                                 self.config.hidden_size, self.config.graph["num_attention_heads"] if self.graph_encoder in ["GAT","ATT"] else "N/A"))
         logger.info("data_flow_gate = {}".format(self.config.graph["data_flow_gate"] if self.config.graph["use_data_flow_gate"] 
                                                     and self.graph_encoder=="GCN" else "N/A"))
-        logger.info("fusion_gate = {}".format(self.config.graph["fusion_gate"] if self.config.graph["use_fusion_gate"] else "N/A"))
+        logger.info("fusion_gate = {} (const = {})".format(self.config.graph["fusion_gate"] if self.config.graph["use_fusion_gate"] and self.fusion_type!="top" else "N/A",
+                                                self.config.graph["fusion_gate_const"] if self.config.graph["fusion_gate"] == "ConstantGateLayer" else "N/A"))
         logger.info("rel_embed_size = {}, num_basic_matrix = {}".format(self.config.graph["rel_embed_size"] if self.use_rel_embedding and self.graph_encoder!="RGCN" else "N/A",
                                                 self.config.graph["num_basic_matrix"] if self.graph_encoder=="RGCN" else "N/A"))
 
