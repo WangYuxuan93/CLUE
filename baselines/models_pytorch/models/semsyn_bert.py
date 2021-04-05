@@ -19,6 +19,7 @@ from models.gate import HighwayGateLayer, ConstantGateLayer
 from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer
 from models.gnn_encoder import GNNEncoder
+from models.graph_mask_encoder import BertGraphMaskLayer
 
 import logging
 logger = logging.getLogger(__name__)
@@ -303,7 +304,10 @@ class SemSynBertEncoder(nn.Module):
         self.use_rel_embedding = self.graph_encoder != "RGCN" and config.graph["use_rel_embedding"]
         self.data_flow = config.graph["data_flow"]
 
-        if self.fusion_type in ["inter", "top"]:
+        if self.fusion_type == "mask":
+            self.layer = nn.ModuleList([BertGraphMaskLayer(config) if i in self.structured_layers
+                                    else BertLayer(config) for i in range(config.num_hidden_layers)])
+        elif self.fusion_type in ["inter", "top"]:
             self.layer = nn.ModuleList([BertLayer(config) for i in range(config.num_hidden_layers)])
         elif self.fusion_type == "residual":
             self.layer = nn.ModuleList([ResidualGNNBertLayer(config) if i in self.structured_layers
@@ -339,7 +343,7 @@ class SemSynBertEncoder(nn.Module):
 
     def show_info(self):
         logger.info("###### SemSynBERT Encoder ######")
-        logger.info("graph_encoder = {}, fusion_type = {}".format(self.graph_encoder, self.fusion_type))
+        logger.info("graph_encoder = {}, fusion_type = {}".format('GraphMask' if self.fusion_type =="mask" else self.graph_encoder, self.fusion_type))
         logger.info("data_flow = {}, top num_layers = {}, structured_layers = {}".format(self.data_flow, 
                                                     self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A",
                                                     self.structured_layers if self.fusion_type!="top" else "N/A"))

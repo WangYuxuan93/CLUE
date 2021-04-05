@@ -83,7 +83,10 @@ def clue_parsed_convert_examples_to_features(
     expand_type="word",
     align_type="nltk",
     return_tensor=True,
-    compute_dist=False
+    compute_dist=False,
+    return_graph_mask=False, 
+    n_mask=3, 
+    mask_types=["parent","child"]
     ):
     """
     Loads a data file into a list of ``InputFeatures``
@@ -168,7 +171,11 @@ def clue_parsed_convert_examples_to_features(
                     max_length=max_length, 
                     align_type=align_type, 
                     return_tensor=return_tensor, 
-                    sep_token_id=tokenizer.sep_token_id)
+                    sep_token_id=tokenizer.sep_token_id,
+                    return_graph_mask=return_graph_mask, 
+                    n_mask=n_mask, 
+                    mask_types=mask_types
+                    )
     dists = None
     if compute_dist:
         dists = compute_distance(heads, attention_mask_list)

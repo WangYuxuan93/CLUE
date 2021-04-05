@@ -31,6 +31,35 @@ ROOT = "_ROOT"
 END = "_END"
 NUM_SYMBOLIC_TAGS = 3
 
+
+def convert_graph_to_masks(heads, n_mask=3, mask_types=["parent","child"], debug=False):
+    """
+    heads: (seq_len, seq_len)
+    """
+    parent_masks = []
+    child_masks = []
+    if "parent" in mask_types:
+        origin_parents = heads
+        parents = origin_parents
+    if "child" in mask_types:
+        origin_childs = heads.permute(1,0)
+        childs = origin_childs
+
+    for dist in range(n_mask):
+        if "parent" in mask_types:
+            parent_masks.append(parents)
+            parents = torch.matmul(parents, origin_parents)
+        if "child" in mask_types:
+            child_masks.append(childs)
+            childs = torch.matmul(childs, origin_childs)
+
+    # len(mask_types) * n_mask * [(seq_len, seq_len)]
+    masks = parent_masks + child_masks
+    # (len(mask_types) * n_mask, seq_len, seq_len)
+    attention_mask = torch.stack(masks, dim=0)
+    return attention_mask
+
+
 def convert_tokens_to_ids(tokenizer, tokens):
 
     all_wordpiece_list = []
@@ -252,6 +281,108 @@ def first_ids_to_map(first_ids, lengths, debug=False):
     return wid2wpid_list
 
 
+def generate_syntax_masks_with_parser(parsing_result, attention_mask, n_mask, token_shift=0, 
+                                        token_index_every_word=None, debug=True):
+    # parents & children masks
+    for depth in range(1, n_mask+1):
+        word_shift = 0
+        for s_idx in range(len(parsing_result.sentences)):
+            for word in parsing_result.sentences[s_idx].words:
+                par = int(word.id) # init
+                flag = 0
+                for i in range(depth):
+                    if(par == 0): # if the node is the root, then end the search
+                        flag = 1
+                        break
+                    par = int(parsing_result.sentences[s_idx].words[par - 1].head)
+                
+                if flag == 0 and par != 0: # during the depth, find word's parent is par
+                    w_idx_0 = int(word.id) - 1
+                    w_idx_1 = par -1
+                    total_shift = word_shift + token_shift
+                    if token_index_every_word == None:
+                        attention_mask[depth-1, total_shift+w_idx_0, total_shift+w_idx_1] = 1
+                        attention_mask[depth-1+n_mask, total_shift+w_idx_1, total_shift+w_idx_0] = 1
+                    else:
+                        word_idx_0 = word_shift + w_idx_0
+                        word_idx_1 = word_shift + w_idx_1
+                        if word_idx_0 < len(token_index_every_word) and word_idx_1 < len(token_index_every_word):
+                            token_idx_0 = token_index_every_word[word_idx_0]
+                            token_idx_1 = token_index_every_word[word_idx_1]
+                            if len(token_idx_0) > 0 and len(token_idx_1) > 0:
+                                idx_0 = token_shift + np.array(token_idx_0)
+                                idx_1 = token_shift + np.array(token_idx_1)
+                                attention_mask[depth-1, idx_0[0]:idx_0[-1]+1, idx_1[0]:idx_1[-1]+1] = 1
+                                attention_mask[depth-1+n_mask, idx_1[0]:idx_1[-1]+1, idx_0[0]:idx_0[-1]+1] = 1
+                        
+                        
+            word_shift += len(parsing_result.sentences[s_idx].words)
+    
+    # siblings masks
+    word_shift = 0
+    for s_idx in range(len(parsing_result.sentences)):
+        for wordi in parsing_result.sentences[s_idx].words:
+            for wordj in parsing_result.sentences[s_idx].words:
+                if int(wordi.id) == int(wordj.id):
+                    continue
+                # find the depth of word i and j
+                depthi = 0
+                par = int(wordi.id)
+                while par != 0:
+                    depthi += 1
+                    par = int(parsing_result.sentences[s_idx].words[par - 1].head)
+                
+                depthj = 0
+                par = int(wordj.id)
+                while par != 0:
+                    depthj += 1
+                    par = int(parsing_result.sentences[s_idx].words[par - 1].head)
+                
+                dist = 0
+                cur_i = int(wordi.id)
+                cur_j = int(wordj.id)
+                # To the same level of depth, cost dist
+                if depthi > depthj:
+                    dist += (depthi - depthj)
+                    for i in range(depthi - depthj):
+                        cur_i = int(parsing_result.sentences[s_idx].words[cur_i - 1].head)
+                if depthi < depthj:
+                    dist += (depthj - depthi)
+                    for i in range(depthj - depthi):
+                        cur_j = int(parsing_result.sentences[s_idx].words[cur_j - 1].head)
+                # cur_i and cur_j now are at the same level, if cur_i == cur_j, then they are parent and child
+                if cur_i == cur_j:
+                    continue
+                while cur_i != cur_j:
+                    dist += 2
+                    cur_i = int(parsing_result.sentences[s_idx].words[cur_i - 1].head)
+                    cur_j = int(parsing_result.sentences[s_idx].words[cur_j - 1].head)
+
+                if dist-2 < n_mask: # pengfei added
+                    w_idx_0 = int(wordi.id) - 1
+                    w_idx_1 = int(wordj.id) -1
+                    total_shift = word_shift + token_shift
+                    if token_index_every_word == None:
+                        # sibling dist at least is 2
+                        attention_mask[dist-2+n_mask*2, total_shift+w_idx_0, total_shift+w_idx_1] = 1
+                        attention_mask[dist-2+n_mask*2, total_shift+w_idx_1, total_shift+w_idx_0] = 1
+                    else:
+                        word_idx_0 = word_shift + w_idx_0
+                        word_idx_1 = word_shift + w_idx_1
+                        if word_idx_0 < len(token_index_every_word) and word_idx_1 < len(token_index_every_word):
+                            token_idx_0 = token_index_every_word[word_idx_0]
+                            token_idx_1 = token_index_every_word[word_idx_1]
+                            if len(token_idx_0) > 0 and len(token_idx_1) > 0:
+                                idx_0 = token_shift + np.array(token_idx_0)
+                                idx_1 = token_shift + np.array(token_idx_1)
+                                attention_mask[dist-2+n_mask*2, idx_0[0]:idx_0[-1]+1, idx_1[0]:idx_1[-1]+1] = 1
+                                attention_mask[dist-2+n_mask*2, idx_1[0]:idx_1[-1]+1, idx_0[0]:idx_0[-1]+1] = 1
+
+        word_shift += len(parsing_result.sentences[s_idx].words)
+        
+    return attention_mask
+
+
 class SDPParser(object):
     def __init__(self, model_path, pretrained_lm="roberta", lm_path=None,
                 use_pretrained_static=False, batch_size=16, parser_type="dm"):
@@ -461,7 +592,8 @@ class SDPParser(object):
         return heads, rels
 
     def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
-                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, **kwargs):
+                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, 
+                    return_graph_mask=False, n_mask=3, mask_types=["parent","child"], **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
 
         if align_type == 'pkuseg':
@@ -531,14 +663,16 @@ class SDPParser(object):
                                         heads_b=heads_b_list, rels_b=rels_b_list, 
                                         heads_c=heads_c_list, rels_c=rels_c_list,
                                         max_length=max_length, expand_type=expand_type,
-                                        max_num_choices=max_num_choices)
+                                        max_num_choices=max_num_choices, return_graph_mask=return_graph_mask, 
+                                        n_mask=n_mask, mask_types=mask_types)
 
         return heads, rels
 
     def align_heads(self, tokenizer, first_ids_list, lengths, heads_a, rels_a, 
                     heads_b=None, rels_b=None,
                     heads_c=None, rels_c=None,
-                    max_length=None, expand_type="copy", max_num_choices=-1, debug=False):
+                    max_length=None, expand_type="copy", max_num_choices=-1, 
+                    return_graph_mask=False, n_mask=3, mask_types=["parent","child"], debug=False):
         null_label = self.parser_label_map[self.null_label]
         word_label = self.parser_label_map[self.word_label]
 
@@ -641,7 +775,10 @@ class SDPParser(object):
                     exit()
 
             if max_num_choices > 0:
-                tmp_heads_list.append(heads.to_sparse())
+                if return_graph_mask:
+                    tmp_heads_list.append(convert_graph_to_masks(heads, n_mask, mask_types).to_sparse())
+                else:
+                    tmp_heads_list.append(heads.to_sparse())
                 tmp_rels_list.append(rels.to_sparse())
                 num_in_list += 1
                 if num_in_list == max_num_choices:
@@ -651,7 +788,14 @@ class SDPParser(object):
                     tmp_rels_list = []
                     num_in_list = 0
             else:
-                heads_list.append(heads.to_sparse())
+                if return_graph_mask:
+                    # (len(mask_types) * n_mask, seq_len, seq_len)
+                    graph_mask = convert_graph_to_masks(heads, n_mask, mask_types)
+                    if debug:
+                        print ("graph_mask:\n", graph_mask)
+                    heads_list.append(graph_mask.to_sparse())
+                else:
+                    heads_list.append(heads.to_sparse())
                 rels_list.append(rels.to_sparse())
             # delete dense tensor to save mem
             del heads

@@ -420,6 +420,8 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
             parser_info += "-3d"
         if args.parser_compute_dist:
             parser_info += "-dist"
+        if args.parser_return_graph_mask:
+            parser_info += "-mask-"+str(args.parser_n_mask)+"-"+"-".join(args.parser_mask_types)
         cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}_{}'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
@@ -480,7 +482,10 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train'):
                                                     expand_type=args.parser_expand_type,
                                                     align_type=args.parser_align_type,
                                                     return_tensor=args.parser_return_tensor,
-                                                    compute_dist=args.parser_compute_dist
+                                                    compute_dist=args.parser_compute_dist,
+                                                    return_graph_mask=args.parser_return_graph_mask, 
+                                                    n_mask=args.parser_n_mask, 
+                                                    mask_types=args.parser_mask_types,
                                                     )
     
             del biaffine_parser
@@ -556,6 +561,10 @@ def main():
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
 
+    parser.add_argument("--parser_return_graph_mask", action='store_true', help="Whether parser should return a in form of graph mask")
+    parser.add_argument("--parser_n_mask", default=3, type=int, help="Max distance for graph mask")
+    parser.add_argument("--parser_mask_types", default="parent:child", type=str, choices=["parent","child","parent:child"], help="Graph mask types (split by :)")
+
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,
                         help="Pretrained config name or path if not the same as model_name")
@@ -624,6 +633,7 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     args = parser.parse_args()
 
+    args.parser_mask_types = args.parser_mask_types.split(":")
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
     #args.output_dir = args.output_dir #+ '{}'.format(args.model_type)

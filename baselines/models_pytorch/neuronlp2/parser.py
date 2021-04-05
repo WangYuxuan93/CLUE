@@ -254,7 +254,8 @@ class Parser(SDPParser):
         return heads, rels
 
     def parse_bpes(self, input_ids, masks, batch_size=None, has_b=False, has_c=False, expand_type="copy",
-                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, **kwargs):
+                    max_length=512, align_type="jieba", return_tensor=True, max_num_choices=-1, 
+                    return_graph_mask=False, n_mask=3, mask_types=["parent","child"], **kwargs):
         batch_size = batch_size if batch_size is not None else self.batch_size
 
         if align_type == 'pkuseg':
@@ -324,7 +325,8 @@ class Parser(SDPParser):
                                             heads_b=heads_b_list, rels_b=rels_b_list, 
                                             heads_c=heads_c_list, rels_c=rels_c_list,
                                             max_length=max_length, expand_type=expand_type,
-                                            max_num_choices=max_num_choices)
+                                            max_num_choices=max_num_choices, return_graph_mask=return_graph_mask, 
+                                            n_mask=n_mask, mask_types=mask_types)
 
         else:
             print ("2D version align heads need to be fixed for chinese bert")
