@@ -156,8 +156,8 @@ class PalGNNLayer(nn.Module):
         super().__init__()
         self.do_pal_project = config.graph["do_pal_project"]
         self.encoder_type = config.graph["encoder"]
-        self.use_output_layer = config.graph["use_output_layer"]
-        self.use_ff_layer = config.graph["use_ff_layer"]
+        self.use_output_layer = "use_output_layer" in config.graph and config.graph["use_output_layer"]
+        self.use_ff_layer = "use_ff_layer" in config.graph and config.graph["use_ff_layer"]
         
         if isinstance(config.hidden_act, str):
             self.hidden_act_fn = ACT2FN[config.hidden_act]
@@ -360,10 +360,12 @@ class SemSynBertEncoder(nn.Module):
         self.show_info()
 
     def show_info(self):
+        self.use_output_layer = "use_output_layer" in self.config.graph and self.config.graph["use_output_layer"]
+        self.use_ff_layer = "use_ff_layer" in self.config.graph and self.config.graph["use_ff_layer"]
         logger.info("###### SemSynBERT Encoder ######")
         logger.info("graph_encoder = {}, fusion_type = {}".format('GraphMask' if self.fusion_type =="mask" else self.graph_encoder, self.fusion_type))
         if self.fusion_type=="residual":
-            logger.info("use_output_layer = {}, use_ff_layer = {}".format(self.config.graph["use_output_layer"], self.config.graph["use_ff_layer"]))
+            logger.info("use_output_layer = {}, use_ff_layer = {}".format(self.use_output_layer, self.use_ff_layer))
         logger.info("data_flow = {}, top num_layers = {}, structured_layers = {}".format(self.data_flow, 
                                                     self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A",
                                                     self.structured_layers if self.fusion_type!="top" else "N/A"))
