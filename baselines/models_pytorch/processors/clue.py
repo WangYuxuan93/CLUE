@@ -34,7 +34,10 @@ def collate_fn(batch):
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
             all_rels = all_rels.to_dense()
-        all_heads = all_heads[:, :max_len, :max_len]
+        if len(all_heads.size()) == 3:
+            all_heads = all_heads[:, :max_len, :max_len]
+        elif len(all_heads.size()) == 4:
+            all_heads = all_heads[:, :, :max_len, :max_len]
         all_rels = all_rels[:, :max_len, :max_len]
         torch.set_printoptions(profile="full")
     if num_items == 8:
