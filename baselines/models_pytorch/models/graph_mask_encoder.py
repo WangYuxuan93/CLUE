@@ -78,7 +78,7 @@ class GraphMaskAttention(nn.Module):
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
 
         # task
-        self.use_task_aggregation = False
+        self.use_task_aggregation = config.graph["use_task_aggregation"]
         if self.use_task_aggregation:
             self.query_task = nn.Linear(self.all_head_size, 1)
             self.key_task = nn.Linear(self.all_head_size, self.all_head_size)
@@ -114,6 +114,8 @@ class GraphMaskAttention(nn.Module):
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) # shape(batch_size, num_att, seq_length, seq_length)
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
         if attention_mask is not None:
+            #print ("attention_scores=", attention_scores.size())
+            #print ("attention_mask=", attention_mask.size())
             # Apply syntax masks
             attention_scores = torch.unsqueeze(attention_scores, dim=2) + torch.unsqueeze(attention_mask, dim=1)
                         # batch_size x num_att x 1 x seq_length x seq_length + batch_size x 1 x nmask x seq_length x seq_length
@@ -135,7 +137,7 @@ class GraphMaskAttention(nn.Module):
                             # value_layer: batch_size x heads_num x seq_length x per_head_size
                             # context_layer: batch_size x heads_num x nmask x seq_length x per_head_size
 
-        if False:
+        if self.use_task_aggregation:
             context_layer = context_layer.permute(0, 3, 2, 1, 4).contiguous()
             new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
             context_layer = context_layer.view(*new_context_layer_shape)

@@ -374,7 +374,7 @@ class SemSynBertEncoder(nn.Module):
 
         # preprocess
         # convert rels to embedding
-        if self.use_rel_embedding:
+        if self.fusion_type in ["top","residual","inter"] and self.use_rel_embedding:
             if self.data_flow == "c2h":
                 # do not need to add offset since no h2c label
                 rels = rels.permute(0,2,1)
@@ -388,7 +388,7 @@ class SemSynBertEncoder(nn.Module):
             rels = self.rel_dropout(rels)
 
         # convert heads to mask like format
-        if self.graph_encoder == "GAT":
+        if self.fusion_type in ["top","residual","inter"] and self.graph_encoder == "GAT":
             if self.data_flow == "c2h":
                 heads = heads.permute(0, 2, 1)
             elif self.data_flow == "bidir":
@@ -722,8 +722,15 @@ class SemSynBertForMultipleChoice(BertPreTrainedModel):
 
         heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
         rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
-
-        heads = heads.view(-1, heads.size(-2), heads.size(-1)) if heads is not None else None
+        if heads is not None:
+            if len(heads.size()) == 4:
+                #   (batch, n_choices, seq_len, seq_len)
+                # =>(batch*n_choices , seq_len, seq_len)
+                heads = heads.view(-1, heads.size(-2), heads.size(-1))
+            elif len(heads.size()) == 5:
+                #    (batch, n_choices, n_mask, seq_len, seq_len)
+                # => (batch*n_choices, n_mask, seq_len, seq_len)
+                heads = heads.view(-1, heads.size(-3), heads.size(-2), heads.size(-1))
         rels = rels.view(-1, rels.size(-2), rels.size(-1)) if rels is not None else None
 
         outputs = self.bert(

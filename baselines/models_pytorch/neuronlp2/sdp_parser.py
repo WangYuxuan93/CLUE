@@ -776,7 +776,10 @@ class SDPParser(object):
 
             if max_num_choices > 0:
                 if return_graph_mask:
-                    tmp_heads_list.append(convert_graph_to_masks(heads, n_mask, mask_types).to_sparse())
+                    graph_mask = convert_graph_to_masks(heads, n_mask, mask_types)
+                    if debug:
+                        print ("graph_mask:\n", graph_mask)
+                    tmp_heads_list.append(graph_mask.to_sparse())
                 else:
                     tmp_heads_list.append(heads.to_sparse())
                 tmp_rels_list.append(rels.to_sparse())
@@ -794,6 +797,7 @@ class SDPParser(object):
                     if debug:
                         print ("graph_mask:\n", graph_mask)
                     heads_list.append(graph_mask.to_sparse())
+                    del graph_mask
                 else:
                     heads_list.append(heads.to_sparse())
                 rels_list.append(rels.to_sparse())

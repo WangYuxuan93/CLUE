@@ -86,6 +86,8 @@ def cached_features_filename(args, task, data_type='train'):
             parser_info += "-3d"
         if args.parser_compute_dist:
             parser_info += "-dist"
+        if args.parser_return_graph_mask:
+            parser_info += "-mask-"+str(args.parser_n_mask)+"-"+"-".join(args.parser_mask_types)
         cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}_{}'.format(
             data_type,
             list(filter(None, args.model_name_or_path.split('/'))).pop(),
@@ -94,4 +96,5 @@ def cached_features_filename(args, task, data_type='train'):
             parser_info,
             args.parser_expand_type,
             args.parser_align_type))
+    logger.info("Cached features filename: {}".format(cached_features_file))
     return cached_features_file

@@ -614,6 +614,10 @@ def main():
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")
     parser.add_argument("--parser_use_reverse_label", action='store_true', help="Whether use reversed parser label")
 
+    parser.add_argument("--parser_return_graph_mask", action='store_true', help="Whether parser should return a in form of graph mask")
+    parser.add_argument("--parser_n_mask", default=3, type=int, help="Max distance for graph mask")
+    parser.add_argument("--parser_mask_types", default="parent:child", type=str, choices=["parent","child","parent:child"], help="Graph mask types (split by :)")
+
     ## QA parameters
     parser.add_argument('--decision_metric', type=str, default='em', choices=['em','f1','avg'], help="use which metric to chose QA model")
     parser.add_argument('--max_ans_length', type=int, default=50)
@@ -690,6 +694,7 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     args = parser.parse_args()
 
+    args.parser_mask_types = args.parser_mask_types.split(":")
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
     #args.output_dir = args.output_dir #+ '{}'.format(args.model_type)

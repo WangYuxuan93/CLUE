@@ -413,7 +413,10 @@ def convert_parsed_examples_to_features(
         expand_type="word",
         align_type="nltk",
         return_tensor=True,
-        compute_dist=False
+        compute_dist=False,
+        return_graph_mask=False, 
+        n_mask=3, 
+        mask_types=["parent","child"]
     ):
     '''
     将所有候选答案放置在片段开头
@@ -550,7 +553,10 @@ def convert_parsed_examples_to_features(
             align_type=align_type, 
             return_tensor=return_tensor, 
             sep_token_id=tokenizer.sep_token_id,
-            max_num_choices=max_num_choices)
+            max_num_choices=max_num_choices,
+            return_graph_mask=return_graph_mask, 
+            n_mask=n_mask, 
+            mask_types=mask_types)
 
     #heads = flat_heads.split(max_num_choices, dim=0)
     #rels = flat_rels.split(max_num_choices, dim=0)
@@ -733,7 +739,10 @@ def load_and_cache_chid_examples(args, task, tokenizer, data_type='train',
                                                     expand_type=args.parser_expand_type,
                                                     align_type=args.parser_align_type,
                                                     return_tensor=args.parser_return_tensor,
-                                                    compute_dist=args.parser_compute_dist
+                                                    compute_dist=args.parser_compute_dist,
+                                                    return_graph_mask=args.parser_return_graph_mask, 
+                                                    n_mask=args.parser_n_mask, 
+                                                    mask_types=args.parser_mask_types,
                                                     )
     
             del biaffine_parser

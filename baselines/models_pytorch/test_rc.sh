@@ -4,7 +4,7 @@
 # @Last Modified by:   bo.shi
 # @Last Modified time: 2020-01-01 11:46:07
 
-TASK_NAME="chid"
+TASK_NAME="c3"
 MODEL_NAME="bert-base-chinese"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
@@ -36,6 +36,8 @@ if [ $# == 0 ]; then
       --parser_return_tensor \
       --parser_align_type=pkuseg \
       --parser_expand_type=copy-word \
+      --parser_n_mask 3 \
+      --parser_mask_types parent:child \
       --do_train \
       --do_eval \
       --do_predict \
