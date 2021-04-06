@@ -32,7 +32,31 @@ END = "_END"
 NUM_SYMBOLIC_TAGS = 3
 
 
-def convert_graph_to_masks(heads, n_mask=3, mask_types=["parent","child"], debug=False):
+def generate_cross_text_mask(cross_mask, wp_end_idx_a=None, wp_end_idx_b=None, wp_end_idx_c=None, debug=False):
+    if wp_end_idx_b is None and wp_end_idx_c is None:
+        return None
+    if debug:
+        print ("wp_end_idx_a:", wp_end_idx_a)
+        print ("wp_end_idx_b:", wp_end_idx_b)
+        print ("wp_end_idx_c:", wp_end_idx_c)
+    if wp_end_idx_b is not None and wp_end_idx_c is None:
+        cross_mask[0:wp_end_idx_a, wp_end_idx_a:wp_end_idx_b] = 1
+        cross_mask[wp_end_idx_a:wp_end_idx_b, 0:wp_end_idx_a] = 1
+        cross_mask[range(wp_end_idx_b), range(wp_end_idx_b)] = 1
+    elif wp_end_idx_b is not None and wp_end_idx_c is not None:
+        cross_mask[0:wp_end_idx_a, wp_end_idx_a:wp_end_idx_c] = 1 # a => b,c
+        cross_mask[wp_end_idx_a:wp_end_idx_b, 0:wp_end_idx_a] = 1 # b=>a
+        cross_mask[wp_end_idx_a:wp_end_idx_b, wp_end_idx_b:wp_end_idx_c] = 1 # b=>c
+        cross_mask[wp_end_idx_b:wp_end_idx_c, 0:wp_end_idx_b] = 1 # c => a,b
+    if debug:
+        torch.set_printoptions(profile="full")
+        print ("cross_mask:\n", cross_mask)
+        exit()
+    return cross_mask
+
+
+def convert_graph_to_masks(heads, n_mask=3, mask_types=["parent","child"], 
+                           wp_end_idx_a=None, wp_end_idx_b=None, wp_end_idx_c=None, debug=False):
     """
     heads: (seq_len, seq_len)
     """
@@ -55,6 +79,10 @@ def convert_graph_to_masks(heads, n_mask=3, mask_types=["parent","child"], debug
 
     # len(mask_types) * n_mask * [(seq_len, seq_len)]
     masks = parent_masks + child_masks
+    if wp_end_idx_b is not None:
+        cross_mask = torch.zeros_like(heads)
+        cross_mask = generate_cross_text_mask(cross_mask, wp_end_idx_a, wp_end_idx_b, wp_end_idx_c)
+        masks.append(cross_mask)
     # (len(mask_types) * n_mask, seq_len, seq_len)
     attention_mask = torch.stack(masks, dim=0)
     return attention_mask
@@ -282,7 +310,7 @@ def first_ids_to_map(first_ids, lengths, debug=False):
 
 
 def generate_syntax_masks_with_parser(parsing_result, attention_mask, n_mask, token_shift=0, 
-                                        token_index_every_word=None, debug=True):
+                                        token_index_every_word=None, debug=False):
     # parents & children masks
     for depth in range(1, n_mask+1):
         word_shift = 0
@@ -710,6 +738,17 @@ class SDPParser(object):
                         if child_id < max_length and head_id < max_length:
                             heads[child_id][head_id] = 1
                             rels[child_id][head_id] = label
+
+            wp_end_idx_a = wid2wpid[list(heads_a[i].size())[0]][0]
+            if heads_b:
+                wp_end_idx_b = wid2wpid[list(heads_a[i].size())[0] + list(heads_b[i].size())[0]][0]
+            else:
+                wp_end_idx_b = None
+            if heads_c:
+                wp_end_idx_c = wid2wpid[list(heads_a[i].size())[0] + list(heads_b[i].size())[0]+ list(heads_c[i].size())[0]][0]
+            else:
+                wp_end_idx_c = None
+
             if heads_b:
                 # here only 1 [SEP] in between, offset is (len_a-1) +1
                 offset = list(heads_a[i].size())[0] #+ 1
@@ -776,7 +815,7 @@ class SDPParser(object):
 
             if max_num_choices > 0:
                 if return_graph_mask:
-                    graph_mask = convert_graph_to_masks(heads, n_mask, mask_types)
+                    graph_mask = convert_graph_to_masks(heads, n_mask, mask_types, wp_end_idx_a, wp_end_idx_b, wp_end_idx_c)
                     if debug:
                         print ("graph_mask:\n", graph_mask)
                     tmp_heads_list.append(graph_mask.to_sparse())
@@ -793,7 +832,7 @@ class SDPParser(object):
             else:
                 if return_graph_mask:
                     # (len(mask_types) * n_mask, seq_len, seq_len)
-                    graph_mask = convert_graph_to_masks(heads, n_mask, mask_types)
+                    graph_mask = convert_graph_to_masks(heads, n_mask, mask_types, wp_end_idx_a, wp_end_idx_b, wp_end_idx_c)
                     if debug:
                         print ("graph_mask:\n", graph_mask)
                     heads_list.append(graph_mask.to_sparse())
