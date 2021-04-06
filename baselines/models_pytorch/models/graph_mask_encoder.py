@@ -138,6 +138,7 @@ class GraphMaskAttention(nn.Module):
                             # context_layer: batch_size x heads_num x nmask x seq_length x per_head_size
 
         if self.use_task_aggregation:
+            # context_layer: batch_size x seq_length x nmask x heads_num x per_head_size
             context_layer = context_layer.permute(0, 3, 2, 1, 4).contiguous()
             new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
             context_layer = context_layer.view(*new_context_layer_shape)

@@ -12,7 +12,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
 from transformers import PretrainedConfig, BertPreTrainedModel
-from transformers.modeling_bert import (BertEmbeddings, BertAttention, BertIntermediate, BertLayer, BertPooler)
+from transformers.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
 from models.gate import HighwayGateLayer, ConstantGateLayer
@@ -156,6 +156,8 @@ class PalGNNLayer(nn.Module):
         super().__init__()
         self.do_pal_project = config.graph["do_pal_project"]
         self.encoder_type = config.graph["encoder"]
+        self.use_output_layer = config.graph["use_output_layer"]
+        self.use_ff_layer = config.graph["use_ff_layer"]
         
         if isinstance(config.hidden_act, str):
             self.hidden_act_fn = ACT2FN[config.hidden_act]
@@ -179,6 +181,12 @@ class PalGNNLayer(nn.Module):
         elif self.encoder_type == "LIN": # linear 
             self.attention = None
 
+        if self.use_output_layer:
+            self.attention_output = BertSelfOutput(config)
+        if self.use_ff_layer:
+            self.intermediate = BertIntermediate(config)
+            self.output = BertOutput(config)
+
 
     def forward(
         self, 
@@ -187,26 +195,36 @@ class PalGNNLayer(nn.Module):
         heads=None, 
         rels=None,
     ):
-        if self.do_pal_project:
-            hidden_states = self.dense_down(hidden_states)
+
+        input_tensor = self.dense_down(hidden_states) if self.do_pal_project else hidden_states
         if self.encoder_type == "GCN":
-            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
+            attention_hiddens = self.attention(input_tensor, attention_mask, heads=heads, rels=rels)
         elif self.encoder_type == "RGCN":
-            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
+            attention_hiddens = self.attention(input_tensor, attention_mask, heads=heads, rels=rels)
         elif self.encoder_type == "GAT":
-            hidden_states = self.attention(hidden_states, attention_mask, heads=heads, rels=rels)
+            attention_hiddens = self.attention(input_tensor, attention_mask, heads=heads, rels=rels)
         elif self.encoder_type == "ATT":
-            hidden_states = self.attention(hidden_states, attention_mask)[0]
+            attention_hiddens = self.attention(input_tensor, attention_mask)[0]
         elif self.encoder_type == "LIN":
             # for linear we add act in between
-            hidden_states = self.hidden_act_fn(hidden_states)
+            attention_hiddens = self.hidden_act_fn(input_tensor)
         
-        if self.do_pal_project:
-            hidden_states = self.dense_up(hidden_states)
+        attention_hiddens = self.dense_up(attention_hiddens) if self.do_pal_project else attention_hiddens
         if self.encoder_type != "LIN":
-            hidden_states = self.hidden_act_fn(hidden_states)
+            attention_hiddens = self.hidden_act_fn(attention_hiddens)
+
+        if self.use_output_layer:
+            attention_output = self.attention_output(attention_hiddens, hidden_states)
+        else:
+            attention_output = attention_hiddens
+
+        if self.use_ff_layer:
+            intermediate_output = self.intermediate(attention_output)
+            layer_output = self.output(intermediate_output, attention_output)
+        else:
+            layer_output = attention_output
         
-        return hidden_states
+        return layer_output
 
 
 class ResidualBertOutput(nn.Module):
@@ -344,6 +362,8 @@ class SemSynBertEncoder(nn.Module):
     def show_info(self):
         logger.info("###### SemSynBERT Encoder ######")
         logger.info("graph_encoder = {}, fusion_type = {}".format('GraphMask' if self.fusion_type =="mask" else self.graph_encoder, self.fusion_type))
+        if self.fusion_type=="residual":
+            logger.info("use_output_layer = {}, use_ff_layer = {}".format(self.config.graph["use_output_layer"], self.config.graph["use_ff_layer"]))
         logger.info("data_flow = {}, top num_layers = {}, structured_layers = {}".format(self.data_flow, 
                                                     self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A",
                                                     self.structured_layers if self.fusion_type!="top" else "N/A"))

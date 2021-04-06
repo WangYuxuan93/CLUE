@@ -35,7 +35,6 @@ if [ $# == 0 ]; then
       --parser_return_tensor \
       --parser_align_type pkuseg \
       --parser_expand_type copy \
-      --parser_return_graph_mask \
       --parser_n_mask 3 \
       --parser_mask_types parent:child \
       --do_train \
