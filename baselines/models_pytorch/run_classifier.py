@@ -218,7 +218,7 @@ def train(args, train_dataset, model, tokenizer):
                 result = None
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     print(" ")
-                    log_history.append({'step': global_step, 'loss': loss.item()})
+                    log_history.append({'epoch': epoch, 'step': global_step, 'loss': loss.item()})
                     # Log metrics
                     if args.local_rank == -1:  # Only evaluate when single GPU otherwise metrics may not average well
                         logger.info("Epoch = {}, Global step = {}".format(epoch, global_step))
@@ -226,7 +226,7 @@ def train(args, train_dataset, model, tokenizer):
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     if result is not None:
-                        log_history.append({'step': global_step, 'eval_loss': result['eval_loss'], 
+                        log_history.append({'epoch': epoch, 'step': global_step, 'eval_loss': result['eval_loss'], 
                                             'eval_acc': result['acc']})
                     if result is None or result['acc'] > trainer_state['best_metric']:
                         # Save model checkpoint
