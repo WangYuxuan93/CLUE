@@ -254,19 +254,20 @@ def merge_first_ids(tokenizer, ids, ids_a, first_ids_a,
         #print (ids_a)
         merge_ids = ids_a[i][1:]
         # minus 1 for removing the root token
-        first_ids = [x-1 for x in first_ids_a[i]] + [len(merge_ids)-1]
+        # first_ids_a: [CLS] ... [SEP]
+        first_ids = [x-1 for x in first_ids_a[i]] #+ [len(merge_ids)-1]
         if ids_b is not None:
             # x -1 for rm the [CLS] of ids_b, offset = len(merge_ids)-1
             first_ids += [x-1+len(merge_ids)-1 for x in first_ids_b[i][1:]]
             # only 1 [SEP] for chinese bert/roberta
             merge_ids += ids_b[i][2:]
-            first_ids += [len(merge_ids)-1]
+            #first_ids += [len(merge_ids)-1]
         if ids_c is not None:
             # x -1 for rm the [CLS] of ids_c, offset = len(merge_ids)-1
             first_ids += [x-1+len(merge_ids)-1 for x in first_ids_c[i][1:]]
             # only 1 [SEP] for chinese bert/roberta
             merge_ids += ids_c[i][2:]
-            first_ids += [len(merge_ids)-1]
+            #first_ids += [len(merge_ids)-1]
         if debug:
             print ("ids_a:\n{}".format(ids_a[i]))
             print ("first_ids_a:\n",first_ids_a[i])
@@ -279,6 +280,7 @@ def merge_first_ids(tokenizer, ids, ids_a, first_ids_a,
             print ("first_ids:\n",first_ids)
             print ("merge_ids:\n", merge_ids)
             print ("ids:\n", ids[i])
+            exit()
 
         assert merge_ids == ids[i][:len(merge_ids)]
         
@@ -520,8 +522,8 @@ class SDPParser(object):
                 while i < len(tokens):
                     token = tokens[i]
                     offset = 0
-                    #if debug:
-                    #    print ("token:{} | wp:{}".format(token[offset:], wp))
+                    if debug:
+                        print ("token:{} | wp:{}".format(token[offset:], wp))
                     """
                     if token.startswith("``") and (wp[0]=='"' or (len(wp)>1 and wp[1]=='"')):
                         token = token.replace("``", '"')
@@ -576,11 +578,14 @@ class SDPParser(object):
                                     token[offset:], wp, tokens, wps))
                                 exit()
                     i += 1
+
+                first_ids = first_ids+[first_ids[-1]+1] # add one idx for [SEP]
                 if debug:
                     print ("tokens:\n", tokens)
                     print ("wps:\n", wps)
                     print ("first_ids:\n", first_ids)
-                first_ids_list.append(first_ids)
+                    #exit()
+                first_ids_list.append(first_ids) 
 
         max_len = max([len(i) for i in first_ids_list])
         first_ids = np.stack(
@@ -594,7 +599,7 @@ class SDPParser(object):
         masks = torch.ones_like(first_ids)
         zeros = torch.zeros_like(first_ids)
         masks = torch.where(first_ids==0, zeros, masks)
-        lengths = masks.sum(-1).cpu().numpy()
+        lengths = masks.sum(-1).cpu().numpy() - 1 # -1 since the end [SEP] token is also included
         ids = ids.to(self.device)
         first_ids = first_ids.to(self.device)
         masks = masks.to(self.device)
@@ -750,6 +755,7 @@ class SDPParser(object):
                 wp_end_idx_c = None
 
             if heads_b:
+                # heads_a: [CLS] W1 W2 .. Wn
                 # here only 1 [SEP] in between, offset is (len_a-1) +1
                 offset = list(heads_a[i].size())[0] #+ 1
                 arc_indices = torch.nonzero(heads_b[i], as_tuple=False).detach().cpu().numpy()
