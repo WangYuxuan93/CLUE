@@ -4,7 +4,8 @@ import torch
 from torch import nn
 
 #from transformers.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
-from transformers.models.bert.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
+#from transformers.models.bert.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
+from models.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
 from models.gate import HighwayGateLayer
 
 def convert_batched_graph_to_masks(heads, n_mask=3, mask_types=["parent","child"]):

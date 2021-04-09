@@ -4,7 +4,8 @@ import torch
 from torch import nn
 
 #from transformers.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
-from transformers.models.bert.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
+#from transformers.models.bert.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
+from models.modeling_bert import (BertOutput, BertIntermediate, BertSelfOutput)
 from models.gate import HighwayGateLayer
 from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer

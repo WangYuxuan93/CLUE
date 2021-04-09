@@ -13,7 +13,8 @@ from torch.nn import CrossEntropyLoss, MSELoss
 
 from transformers import PretrainedConfig, BertPreTrainedModel
 #from transformers.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
-from transformers.models.bert.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
+#from transformers.models.bert.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
+from models.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
 from models.gate import HighwayGateLayer, ConstantGateLayer
@@ -263,26 +264,6 @@ class ResidualGNNBertLayer(nn.Module):
 
         self.fusion_type = config.fusion_type
         self.res_layer = PalGNNLayer(config)
-        """
-        if self.pal_gate_type == "scalar":
-            # no need to init
-            self.pal_gate_scalar = nn.Parameter(torch.tensor(0.))
-        elif self.pal_gate_type == "task":
-            #self.pal_gamma = nn.Parameter(torch.FloatTensor([10.0]))
-            self.pal_gate_dense = nn.Linear(config.task_embed_size, 1)
-        elif self.pal_gate_type == "input":
-            self.pal_gate_dense = nn.Linear(config.hidden_size, 1, bias=False)
-        """
-    """
-    def task_gate_value(self, task_embed=None):
-        if self.pal_gate_type == "scalar":   
-            return nn.Sigmoid()(self.pal_gate_scalar)
-        elif self.pal_gate_type == "task":
-            #return self.pal_gate_dense(task_embed)
-            return nn.Sigmoid()(self.pal_gate_dense(task_embed))
-        else:
-            return None
-    """
 
     def forward(
         self,
@@ -297,8 +278,8 @@ class ResidualGNNBertLayer(nn.Module):
     ):
         self_attention_outputs = self.attention(
             hidden_states,
-            attention_mask,
-            head_mask,
+            attention_mask=attention_mask,
+            head_mask=head_mask,
             output_attentions=output_attentions,
         )
         attention_output = self_attention_outputs[0]
@@ -448,32 +429,31 @@ class SemSynBertEncoder(nn.Module):
                 if self.fusion_type not in ["inter", "top"] and i in self.structured_layers:
                     layer_outputs = layer_module(
                         hidden_states,
-                        attention_mask,
-                        layer_head_mask,
-                        encoder_hidden_states,
-                        encoder_attention_mask,
-                        output_attentions,
-                        heads,
-                        rels
+                        attention_mask=attention_mask,
+                        head_mask=layer_head_mask,
+                        encoder_hidden_states=encoder_hidden_states,
+                        encoder_attention_mask=encoder_attention_mask,
+                        output_attentions=output_attentions,
+                        heads=heads,
+                        rels=rels
                     )
                 else:
                     layer_outputs = layer_module(
                         hidden_states,
-                        attention_mask,
-                        layer_head_mask,
-                        encoder_hidden_states,
-                        encoder_attention_mask,
-                        None,
-                        output_attentions,
+                        attention_mask=attention_mask,
+                        head_mask=layer_head_mask,
+                        encoder_hidden_states=encoder_hidden_states,
+                        encoder_attention_mask=encoder_attention_mask,
+                        output_attentions=output_attentions,
                     )
             hidden_states = layer_outputs[0]
 
             if self.fusion_type == "inter" and i in self.structured_layers:
                 inter_hidden_states = self.inter_gnn_layers[i](
                     hidden_states,
-                    attention_mask,
-                    heads,
-                    rels,
+                    attention_mask=attention_mask,
+                    heads=heads,
+                    rels=rels,
                 )
                 if self.use_fusion_gate:
                     hidden_states = self.gates[i](hidden_states, inter_hidden_states)
@@ -487,7 +467,11 @@ class SemSynBertEncoder(nn.Module):
             all_hidden_states = all_hidden_states + (hidden_states,)
 
         if self.fusion_type == "top":
-            hidden_states = self.gnn_encoder(hidden_states, attention_mask, heads, rels)
+            hidden_states = self.gnn_encoder(
+                                    hidden_states, 
+                                    attention_mask=attention_mask, 
+                                    heads=heads, 
+                                    rels=rels)
 
         return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)
 
