@@ -16,7 +16,8 @@ from neuronlp2.nn.self_attention import AttentionEncoderConfig, AttentionEncoder
 from neuronlp2.nn.graph_attention_network import GraphAttentionNetworkConfig, GraphAttentionNetwork
 from neuronlp2.nn.dropout import drop_input_independent
 from torch.autograd import Variable
-from transformers.modeling_auto import AutoModel
+#from transformers.modeling_auto import AutoModel
+from transformers import AutoModel
 import itertools
 from neuronlp2.nn.cpg_lstm import CPG_LSTM
 

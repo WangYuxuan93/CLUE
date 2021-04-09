@@ -12,7 +12,8 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
 from transformers import PretrainedConfig, BertPreTrainedModel
-from transformers.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
+#from transformers.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
+from transformers.models.bert.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
 from models.gate import HighwayGateLayer, ConstantGateLayer
@@ -462,6 +463,7 @@ class SemSynBertEncoder(nn.Module):
                         layer_head_mask,
                         encoder_hidden_states,
                         encoder_attention_mask,
+                        None,
                         output_attentions,
                     )
             hidden_states = layer_outputs[0]
@@ -623,9 +625,8 @@ class SemSynBertModel(BertPreTrainedModel):
         )
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
-
-        if not return_dict:
-            return (sequence_output, pooled_output) + encoder_outputs[1:]
+        #if not return_dict:
+        return (sequence_output, pooled_output) + encoder_outputs[1:]
 
 
 class SemSynBertForSequenceClassification(BertPreTrainedModel):
