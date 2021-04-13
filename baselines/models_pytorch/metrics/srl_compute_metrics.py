@@ -30,12 +30,15 @@ def prf(preds, labels, pad_id=1):
     else:
         f1 = 2 * (precision * recall) / (precision + recall)
     return {
+        "n_correct": n_corr,
+        "n_gold": n_gold,
+        "n_pred": n_pred,
         "precision": precision,
         "recall": recall,
         "f1": f1
     }
 
-def compute_metrics(task_name, preds, labels, debug=True):
+def compute_metrics(task_name, preds, labels, debug=False):
     assert len(preds) == len(labels)
     # Remove ignored index (special tokens)
     true_preds = [

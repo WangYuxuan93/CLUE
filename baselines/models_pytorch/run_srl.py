@@ -277,8 +277,8 @@ def evaluate(args, model, tokenizer, prefix=""):
         logger.info("********* Running evaluation {} ********".format(prefix))
         eval_loss = 0.0
         nb_eval_steps = 0
-        preds = None
-        out_label_ids = None
+        preds = []
+        out_label_ids = []
         pbar = ProgressBar(n_total=len(eval_dataloader), desc="Evaluating")
         for step, batch in enumerate(eval_dataloader):
             model.eval()
@@ -297,18 +297,16 @@ def evaluate(args, model, tokenizer, prefix=""):
                 tmp_eval_loss, logits = outputs[:2]
                 eval_loss += tmp_eval_loss.mean().item()
             nb_eval_steps += 1
-            if preds is None:
-                preds = logits.detach().cpu().numpy()
-                out_label_ids = inputs['labels'].detach().cpu().numpy()
-            else:
-                preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
+            #print ("logits: ", logits.size())
+            #print ("labels: ", inputs['labels'].size())
+            preds.extend([l for l in logits.detach().cpu().numpy().argmax(-1)])
+            out_label_ids.extend([l for l in inputs['labels'].detach().cpu().numpy()])
             pbar(step)
         print(' ')
         if 'cuda' in str(args.device):
             torch.cuda.empty_cache()
         eval_loss = eval_loss / nb_eval_steps
-        preds = np.argmax(preds, axis=-1)
+        #preds = np.argmax(preds, axis=-1)
         result = compute_metrics(eval_task, preds, out_label_ids)
         result['eval_loss'] = eval_loss
         results.update(result)
@@ -340,7 +338,8 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         logger.info("  Num examples = %d", len(pred_dataset))
         logger.info("  Batch size = %d", args.pred_batch_size)
         nb_pred_steps = 0
-        preds = None
+        preds = []
+        out_label_ids = []
         pbar = ProgressBar(n_total=len(pred_dataloader), desc="Predicting")
         for step, batch in enumerate(pred_dataloader):
             model.eval()
@@ -358,19 +357,21 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                 outputs = model(**inputs)
                 _, logits = outputs[:2]
             nb_pred_steps += 1
-            if preds is None:
-                preds = logits.detach().cpu().numpy()
-                out_label_ids = inputs['labels'].detach().cpu().numpy()
-            else:
-                preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
+            preds.extend([l for l in logits.detach().cpu().numpy().argmax(-1)])
+            out_label_ids.extend([l for l in inputs['labels'].detach().cpu().numpy()])
             pbar(step)
         print(' ')
-        predict_label = np.argmax(preds, axis=-1)
+
+        result = compute_metrics(pred_task, preds, out_label_ids)
+        logger.info("  Num examples = %d", len(pred_dataset))
+        logger.info("  Batch size = %d", args.pred_batch_size)
+        logger.info("******** Test results {} ********".format(prefix))
+        for key in sorted(result.keys()):
+            logger.info(" test: %s = %s", key, str(result[key]))
 
         true_predict_label = [
             [label_map[p] for (p, l) in zip(pred, label) if l != -100]
-            for pred, label in zip(predict_label, out_label_ids)
+            for pred, label in zip(preds, out_label_ids)
         ]
 
         output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.txt")
@@ -379,9 +380,16 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         with open(output_submit_file, "w") as writer:
             previous_sid = None
             words_list = []
+            tags_list = []
+            heads_list = []
+            rels_list = []
             labels_list = []
             predicates_list = []
+
             prev_words = None
+            prev_tags = None
+            prev_heads = None
+            prev_rels = None
             predicates = []
             labels = []
             for pred, example in zip(true_predict_label, pred_examples):
@@ -389,10 +397,16 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                 if example.sid != previous_sid:
                     previous_sid = example.sid
                     words_list.append(prev_words)
+                    tags_list.append(prev_tags)
+                    heads_list.append(prev_heads)
+                    rels_list.append(prev_rels)
                     predicates_list.append(predicates)
                     labels_list.append(labels)
                     # start collecting data for a new sentence
                     prev_words = example.tokens_a
+                    prev_tags = example.pos_tags
+                    prev_heads = example.syntax_heads
+                    prev_rels = example.syntax_rels
                     predicates = [example.pred_id]
                     labels = [pred]
                 else:
@@ -400,10 +414,16 @@ def predict(args, model, tokenizer, label_list, prefix=""):
                     labels.append(pred)
             # add the last one
             words_list.append(prev_words)
+            tags_list.append(prev_tags)
+            heads_list.append(prev_heads)
+            rels_list.append(prev_rels)
             predicates_list.append(predicates)
             labels_list.append(labels)
             # rm the first empty data
             words_list = words_list[1:]
+            tags_list = tags_list[1:]
+            heads_list = heads_list[1:]
+            rels_list = rels_list[1:]
             predicates_list = predicates_list[1:]
             labels_list = labels_list[1:]
 
@@ -414,16 +434,27 @@ def predict(args, model, tokenizer, label_list, prefix=""):
             for i in range(len(words_list)):
                 pred_ids = predicates_list[i]
                 words = words_list[i]
+                tags = tags_list[i]
+                heads = heads_list[i]
+                rels = rels_list[i]
                 labels = labels_list[i]
                 output = []
                 for j, word in enumerate(words):
                     items = ['_'] * 14
                     items[0] = str(j+1)
                     items[1] = word
+                    items[2] = word
+                    items[3] = word
+                    items[4] = tags[j]
+                    items[5] = tags[j]
+                    items[8] = heads[j]
+                    items[9] = heads[j]
+                    items[10] = rels[j]
+                    items[11] = rels[j]
                     if j in pred_ids:
                         items[-2] = 'Y'
                         items[-1] = word+'.01'
-                    rel_items = [label[j] if label[j] != '<PAD>' else '_' for label in labels]
+                    rel_items = [label[j] if label[j] not in ['O','<PAD>'] else '_' for label in labels]
                     output.append('\t'.join(items+rel_items))
                 writer.write('\n'.join(output)+'\n\n')
                 

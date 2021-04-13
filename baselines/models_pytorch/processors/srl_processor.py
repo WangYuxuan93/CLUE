@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 class InputSRLExample(object):
     """A single training/test example for simple sequence classification."""
 
-    def __init__(self, guid, sid, tokens_a, pred_id, tokens_b=None, labels=None):
+    def __init__(self, guid, sid, tokens_a, pred_id, 
+                 tokens_b=None, labels=None, pos_tags=None, 
+                 syntax_heads=None, syntax_rels=None):
         """Constructs a InputExample.
         Args:
             guid: Unique id for the example.
@@ -27,11 +29,15 @@ class InputSRLExample(object):
         self.tokens_a = tokens_a
         self.tokens_b = tokens_b
         self.labels = labels
+        self.pos_tags = pos_tags
+        self.syntax_heads = syntax_heads
+        self.syntax_rels = syntax_rels
 
     def show(self):
         logger.info("guid={}, sid={}, pred_id={}".format(self.guid, self.sid, self.pred_id))
         logger.info("tokens_a={}, tokens_b={}".format(self.tokens_a, self.tokens_b))
         logger.info("labels={}".format(self.labels))
+        logger.info("pos_tags={}".format(self.pos_tags))
 
 
 class InputPredRelFeatures(object):
@@ -129,7 +135,7 @@ class SrlProcessor(DataProcessor):
     def get_test_examples(self, data_dir):
         """See base class."""
         return self._create_examples(
-            self._read_conll(os.path.join(data_dir, "test.txt")), "test")
+            self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True)
 
     def get_labels(self):
         """See base class."""
@@ -146,20 +152,27 @@ class SrlProcessor(DataProcessor):
                 pred_senses.append(line[13])
         return pred_ids, pred_senses
 
-    def _create_examples(self, sents, set_type):
+    def _create_examples(self, sents, set_type, use_pos=False):
         """Creates examples for the training and dev sets."""
         examples = []
         for (i, sent) in enumerate(sents):
             sid = "%s-%s" % (set_type, i)
             pred_ids, _ = self.get_pred_ids(sent)
             tokens_a = [line[1] for line in sent]
+            if use_pos:
+                pos_tags = [line[5] for line in sent]
+            else:
+                pos_tags = None
+            heads = [line[8] for line in sent]
+            rels = [line[10] for line in sent]
             for j, pred_id in enumerate(pred_ids): # the j-th predicate
                 guid = "%s-%s" % (set_type, len(examples))
                 tokens_b = [tokens_a[pred_id]]
                 labels = [line[14+j] if line[14+j] != '_' else 'O' for line in sent]
                 examples.append(
                     InputSRLExample(guid=guid, sid=sid, tokens_a=tokens_a, pred_id=pred_id, 
-                                    tokens_b=tokens_b, labels=labels))
+                                    tokens_b=tokens_b, labels=labels, pos_tags=pos_tags,
+                                    syntax_heads=heads, syntax_rels=rels))
         return examples
 
 
@@ -446,6 +459,9 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                 examples = processor.get_dev_examples(args.data_dir)
             else:
                 examples = processor.get_test_examples(args.data_dir)
+            if args.local_rank in [-1, 0]:
+                logger.info("Saving examples into cached file %s", cached_examples_file)
+                torch.save(examples, cached_examples_file)
         else:
             examples = torch.load(cached_examples_file)
     # Load data features from cache or dataset file
