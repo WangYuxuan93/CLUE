@@ -9,9 +9,11 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
+from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import apply_chunking_to_forward
 from transformers import BertModel, BertPreTrainedModel
+from neuronlp2.nn import VarFastLSTM
 
 import logging
 logger = logging.getLogger(__name__)
@@ -359,7 +361,52 @@ class BertPooler(nn.Module):
         return pooled_output
 
 
-class BertForSRL(BertPreTrainedModel):
+
+class BertConfig(PretrainedConfig):
+    model_type = "bert"
+
+    def __init__(
+        self,
+        vocab_size=30522,
+        hidden_size=768,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        intermediate_size=3072,
+        hidden_act="gelu",
+        hidden_dropout_prob=0.1,
+        attention_probs_dropout_prob=0.1,
+        max_position_embeddings=512,
+        type_vocab_size=2,
+        initializer_range=0.02,
+        layer_norm_eps=1e-12,
+        pad_token_id=0,
+        gradient_checkpointing=False,
+        num_labels=2,
+        srl=None,
+        **kwargs
+    ):
+        super().__init__(pad_token_id=pad_token_id, **kwargs)
+
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        self.num_hidden_layers = num_hidden_layers
+        self.num_attention_heads = num_attention_heads
+        self.hidden_act = hidden_act
+        self.intermediate_size = intermediate_size
+        self.hidden_dropout_prob = hidden_dropout_prob
+        self.attention_probs_dropout_prob = attention_probs_dropout_prob
+        self.max_position_embeddings = max_position_embeddings
+        self.type_vocab_size = type_vocab_size
+        self.initializer_range = initializer_range
+        self.layer_norm_eps = layer_norm_eps
+        self.gradient_checkpointing = gradient_checkpointing
+        self.num_labels = num_labels
+
+        # SRL options
+        self.srl = srl
+
+
+class BertForArgumentLabel(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
 
@@ -367,9 +414,24 @@ class BertForSRL(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
+        self.use_predicate_indicator = config.srl["use_predicate_indicator"]
+        if self.use_predicate_indicator:
+            print ("### use predicate_indicator ###")
+            indicator_embed_size = 10
+            self.predicate_indicator_embedding = nn.Embedding(2, indicator_embed_size)
+        else:
+            indicator_embed_size = 0
+
+        self.use_bilstm = config.srl["use_bilstm"]
+        if self.use_bilstm:
+            print ("### use bilstm ###")
+            self.bilstm = VarFastLSTM(config.hidden_size+indicator_embed_size, config.hidden_size, num_layers=1, batch_first=True, bidirectional=True, dropout=[0.33,0.33])
+            self.dense = nn.Linear(4*config.hidden_size, config.hidden_size)
+        else:
+            self.dense = nn.Linear(2*config.hidden_size+indicator_embed_size, config.hidden_size)
+
         self.bert = BertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.dense = nn.Linear(2*config.hidden_size, config.hidden_size)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.activation = nn.SELU()
 
@@ -409,6 +471,14 @@ class BertForSRL(BertPreTrainedModel):
         )
 
         sequence_output = outputs[0]
+
+        if self.use_predicate_indicator:
+            predicate_indicator_embed = self.predicate_indicator_embedding(predicate_mask.long())
+            sequence_output = torch.cat([sequence_output, predicate_indicator_embed], dim=-1)
+
+        if self.use_bilstm:
+            sequence_output, _ = self.bilstm(sequence_output, attention_mask)
+
         # (batch, seq_len, hidden_size)
         sequence_output = self.dropout(sequence_output)
 
@@ -434,6 +504,87 @@ class BertForSRL(BertPreTrainedModel):
                 )
                 #print ("active_labels:\n", active_labels)
                 #print ("active_logits:\n", torch.argmax(active_logits, -1))
+                loss = loss_fct(active_logits, active_labels)
+            else:
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        output = (logits,) + outputs[2:]
+        return ((loss,) + output) if loss is not None else output
+
+
+class BertForPredicateSense(BertPreTrainedModel):
+
+    _keys_to_ignore_on_load_unexpected = [r"pooler"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.use_predicate_indicator = config.srl["use_predicate_indicator"]
+        if self.use_predicate_indicator:
+            indicator_embed_size = 10
+            self.predicate_indicator_embedding = nn.Embedding(2, indicator_embed_size)
+        else:
+            indicator_embed_size = 0
+
+        self.num_labels = config.num_labels
+
+        self.bert = BertModel(config, add_pooling_layer=False)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size+indicator_embed_size, config.num_labels)
+
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        predicate_mask=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        r"""
+        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+            Labels for computing the token classification loss. Indices should be in ``[0, ..., config.num_labels -
+            1]``.
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]
+
+        if self.use_predicate_indicator:
+            predicate_indicator_embed = self.predicate_indicator_embedding(predicate_mask.long())
+            sequence_output = torch.cat([sequence_output, predicate_indicator_embed], dim=-1)
+        
+        sequence_output = self.dropout(sequence_output)
+        logits = self.classifier(sequence_output)
+
+        loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            # Only keep active parts of the loss
+            if attention_mask is not None:
+                active_loss = attention_mask.view(-1) == 1
+                active_logits = logits.view(-1, self.num_labels)
+                active_labels = torch.where(
+                    active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
+                )
                 loss = loss_fct(active_logits, active_labels)
             else:
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))

@@ -39,22 +39,25 @@ def prf(preds, labels, pad_id=1):
     }
 
 def compute_metrics(task_name, preds, labels, debug=False):
-    assert len(preds) == len(labels)
-    # Remove ignored index (special tokens)
-    true_preds = [
-        [p for (p, l) in zip(pred, label) if l != -100]
-        for pred, label in zip(preds, labels)
-    ]
-    true_labels = [
-        [l for (p, l) in zip(pred, label) if l != -100]
-        for pred, label in zip(preds, labels)
-    ]
-    if debug:
-        #print ("preds:\n", preds)
-        #print ("labels:\n", labels)
-        print ("true_preds:\n", true_preds)
-        print ("true_labels:\n", true_labels)
-    
-    if task_name == "srl":
+    task_type = task_name.split('-')[2]
+
+    if task_type == "arg":
+        assert len(preds) == len(labels)
+        # Remove ignored index (special tokens)
+        true_preds = [
+            [p for (p, l) in zip(pred, label) if l != -100]
+            for pred, label in zip(preds, labels)
+        ]
+        true_labels = [
+            [l for (p, l) in zip(pred, label) if l != -100]
+            for pred, label in zip(preds, labels)
+        ]
+        if debug:
+            #print ("preds:\n", preds)
+            #print ("labels:\n", labels)
+            print ("true_preds:\n", true_preds)
+            print ("true_labels:\n", true_labels)
         results = prf(preds=true_preds, labels=true_labels)
         return results
+    else:
+        raise ValueError("Task: {} not defined in metrics!".format(task_name))

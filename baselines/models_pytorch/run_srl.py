@@ -17,36 +17,36 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 
-from transformers import (WEIGHTS_NAME, BertConfig, AutoTokenizer,
-                          BertForSequenceClassification, BertTokenizer,
-                          RobertaConfig, XLNetConfig,
-                          XLNetForSequenceClassification,
-                          XLNetTokenizer,
-                          AlbertForSequenceClassification)
+from transformers import (WEIGHTS_NAME, AutoTokenizer)
 
 from transformers import AdamW, get_linear_schedule_with_warmup
 from metrics.srl_compute_metrics import compute_metrics
-from processors.srl_processor import collate_fn, SrlProcessor, load_and_cache_examples
+from processors.srl_loader import collate_fns, processors, load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
 from tools.progressbar import ProgressBar
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
-from models.semsyn_bert import SemSynBertConfig, SemSynBertForSequenceClassification
-from models.modeling_bert import BertForSRL
+from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
+from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
+from io_utils.srl_writer import write_conll09_argument_label
 import shutil
 import re
 from pathlib import Path
 
-#ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig,
-#                                                                                RobertaConfig)), ())
+SBERT_MODEL = {
+    'conll09-zh-arg': SemSynBertForArgumentLabel,
+    'conll09-en-arg': SemSynBertForArgumentLabel,
+    'conll09-zh-sense': SemSynBertForPredicateSense,
+    'conll09-en-sense': SemSynBertForPredicateSense,
+}
+
 MODEL_CLASSES = {
-    ## bert ernie bert_wwm bert_wwwm_ext
-    'bert': (BertConfig, BertForSRL, AutoTokenizer),
-    'xlnet': (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
-    'roberta': (BertConfig, BertForSequenceClassification, BertTokenizer),
-    'albert': (BertConfig, AlbertForSequenceClassification, BertTokenizer)
+    'conll09-zh-arg': (BertConfig, BertForArgumentLabel, AutoTokenizer),
+    'conll09-en-arg': (BertConfig, BertForArgumentLabel, AutoTokenizer),
+    'conll09-zh-sense': (BertConfig, BertForPredicateSense, AutoTokenizer),
+    'conll09-en-sense': (BertConfig, BertForPredicateSense, AutoTokenizer),
 }
 
 
@@ -118,7 +118,7 @@ def train(args, train_dataset, model, tokenizer):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size,
-                                  collate_fn=collate_fn)
+                                  collate_fn=collate_fns[args.task_type])
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -271,7 +271,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         # Note that DistributedSampler samples randomly
         eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
-                                     collate_fn=collate_fn)
+                                     collate_fn=collate_fns[args.task_type])
 
         # Eval!
         logger.info("********* Running evaluation {} ********".format(prefix))
@@ -332,7 +332,7 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         # Note that DistributedSampler samples randomly
         pred_sampler = SequentialSampler(pred_dataset) if args.local_rank == -1 else DistributedSampler(pred_dataset)
         pred_dataloader = DataLoader(pred_dataset, sampler=pred_sampler, batch_size=args.pred_batch_size,
-                                     collate_fn=collate_fn)
+                                     collate_fn=collate_fns[args.task_type])
 
         logger.info("******** Running prediction {} ********".format(prefix))
         logger.info("  Num examples = %d", len(pred_dataset))
@@ -375,90 +375,11 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         ]
 
         output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.txt")
-        #output_logits_file = os.path.join(pred_output_dir, prefix, "test_logits")
         # 保存标签结果
-        with open(output_submit_file, "w") as writer:
-            previous_sid = None
-            words_list = []
-            tags_list = []
-            heads_list = []
-            rels_list = []
-            labels_list = []
-            predicates_list = []
-
-            prev_words = None
-            prev_tags = None
-            prev_heads = None
-            prev_rels = None
-            predicates = []
-            labels = []
-            for pred, example in zip(true_predict_label, pred_examples):
-                #example.show()
-                if example.sid != previous_sid:
-                    previous_sid = example.sid
-                    words_list.append(prev_words)
-                    tags_list.append(prev_tags)
-                    heads_list.append(prev_heads)
-                    rels_list.append(prev_rels)
-                    predicates_list.append(predicates)
-                    labels_list.append(labels)
-                    # start collecting data for a new sentence
-                    prev_words = example.tokens_a
-                    prev_tags = example.pos_tags
-                    prev_heads = example.syntax_heads
-                    prev_rels = example.syntax_rels
-                    predicates = [example.pred_id]
-                    labels = [pred]
-                else:
-                    predicates.append(example.pred_id)
-                    labels.append(pred)
-            # add the last one
-            words_list.append(prev_words)
-            tags_list.append(prev_tags)
-            heads_list.append(prev_heads)
-            rels_list.append(prev_rels)
-            predicates_list.append(predicates)
-            labels_list.append(labels)
-            # rm the first empty data
-            words_list = words_list[1:]
-            tags_list = tags_list[1:]
-            heads_list = heads_list[1:]
-            rels_list = rels_list[1:]
-            predicates_list = predicates_list[1:]
-            labels_list = labels_list[1:]
-
-            #print ("words_list:\n", words_list)
-            #print ("predicates_list:\n", predicates_list)
-            #print ("labels_list:\n", labels_list)
-
-            for i in range(len(words_list)):
-                pred_ids = predicates_list[i]
-                words = words_list[i]
-                tags = tags_list[i]
-                heads = heads_list[i]
-                rels = rels_list[i]
-                labels = labels_list[i]
-                output = []
-                for j, word in enumerate(words):
-                    items = ['_'] * 14
-                    items[0] = str(j+1)
-                    items[1] = word
-                    items[2] = word
-                    items[3] = word
-                    items[4] = tags[j]
-                    items[5] = tags[j]
-                    items[8] = heads[j]
-                    items[9] = heads[j]
-                    items[10] = rels[j]
-                    items[11] = rels[j]
-                    if j in pred_ids:
-                        items[-2] = 'Y'
-                        items[-1] = word+'.01'
-                    rel_items = [label[j] if label[j] not in ['O','<PAD>'] else '_' for label in labels]
-                    output.append('\t'.join(items+rel_items))
-                writer.write('\n'.join(output)+'\n\n')
+        write_conll09_argument_label(true_predict_label, pred_examples, output_submit_file)
                 
         # 保存中间预测结果
+        #output_logits_file = os.path.join(pred_output_dir, prefix, "test_logits")
         #save_numpy(file_path=output_logits_file, data=preds)
 
 
@@ -485,12 +406,14 @@ def main():
                         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name")
-    parser.add_argument("--task_name", default='srl', type=str, required=True,
+    parser.add_argument("--task_name", default='conll09-zh-arg', type=str, required=True, choices=['conll09-en-sense','conll09-en-arg'
+                        ,'conll09-zh-sense','conll09-zh-arg'],
                         help="The name of the task")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--optim", default="AdamW", type=str, choices=["BERTAdam","AdamW"], help="Optimizer")
     ## SBERT parameters
+    parser.add_argument("--use_gold_syntax", action='store_true', help="Whether to use gold syntax tree")
     parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
     parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
@@ -613,8 +536,8 @@ def main():
     seed_everything(args.seed)
     # Prepare CLUE task
     args.task_name = args.task_name.lower()
-    processor = SrlProcessor()
-    args.output_mode = 'srl'
+    args.task_type = args.task_name.split('-')[2]
+    processor = processors[args.task_type](args.task_name)
     label_list = processor.get_labels()
     num_labels = len(label_list)
 
@@ -622,7 +545,7 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    if args.parser_model is not None:
+    if args.parser_model is not None or args.use_gold_syntax:
         config = SemSynBertConfig.from_pretrained(
                         args.config_name if args.config_name else args.model_name_or_path)
         config.num_labels=num_labels
@@ -630,17 +553,20 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(
                         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                         use_fast=True,)
-        label_path = os.path.join(args.parser_model, "alphabets/type.json")
-        parser_label2id = load_labels_from_json(label_path)
-        config.graph["num_rel_labels"] = len(parser_label2id)
+        if args.use_gold_syntax:
+            config.graph["num_rel_labels"] = len(processor.get_syntax_label_map())
+        else:
+            label_path = os.path.join(args.parser_model, "alphabets/type.json")
+            parser_label2id = load_labels_from_json(label_path)
+            config.graph["num_rel_labels"] = len(parser_label2id)
         
-        model = SemSynBertForSequenceClassification.from_pretrained(
-                        args.model_name_or_path, config=config)
-        model_class = SemSynBertForSequenceClassification
+        model_class = SBERT_MODEL[args.task_name]
+        model = model_class.from_pretrained(args.model_name_or_path, config=config)
         tokenizer_class = AutoTokenizer
     else:
         args.model_type = args.model_type.lower()
-        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.task_name]
+        # this is to test usefulness of indicator
         config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                               num_labels=num_labels, finetuning_task=args.task_name)
         tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
