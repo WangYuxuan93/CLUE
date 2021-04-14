@@ -21,7 +21,7 @@ from transformers import (WEIGHTS_NAME, AutoTokenizer)
 
 from transformers import AdamW, get_linear_schedule_with_warmup
 from metrics.srl_compute_metrics import compute_metrics
-from processors.srl_loader import collate_fns, processors, load_and_cache_examples
+from processors.srl_loader import collate_fn, processors, load_and_cache_examples
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
 from tools.progressbar import ProgressBar
@@ -30,7 +30,7 @@ from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
 from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
-from io_utils.srl_writer import write_conll09_argument_label
+from io_utils.srl_writer import write_conll09_predicate_sense, write_conll09_argument_label
 import shutil
 import re
 from pathlib import Path
@@ -118,7 +118,7 @@ def train(args, train_dataset, model, tokenizer):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size,
-                                  collate_fn=collate_fns[args.task_type])
+                                  collate_fn=collate_fn)
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -224,15 +224,19 @@ def train(args, train_dataset, model, tokenizer):
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     if result is not None:
-                        log_history.append({'epoch': epoch, 'step': global_step, 'eval_loss': result['eval_loss'], 
-                                            'eval_f1': result['f1'], 'eval_precision': result['precision'], 
-                                            'eval_recall': result['recall']})
-                    if result is None or result['f1'] > trainer_state['best_metric']:
+                        _result = {'epoch': epoch, 'step': global_step, 'eval_loss': result['eval_loss']}
+                        for key in result:
+                            if key.startswith('n_'): continue
+                            if not key.startswith('eval'):
+                                _result['eval_'+key] = result[key]
+                        log_history.append(_result)
+                    decisive_metric = 'f1' if args.task_name.endswith('arg') else 'acc'
+                    if result is None or result[decisive_metric] > trainer_state['best_metric']:
                         # Save model checkpoint
                         output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-                        if result is not None and result['f1'] > trainer_state['best_metric']:
+                        if result is not None and result[decisive_metric] > trainer_state['best_metric']:
                                 trainer_state['best_checkpoint'] = output_dir
-                                trainer_state['best_metric'] = result['f1']
+                                trainer_state['best_metric'] = result[decisive_metric]
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir)
                         model_to_save = model.module if hasattr(model,
@@ -271,7 +275,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         # Note that DistributedSampler samples randomly
         eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size,
-                                     collate_fn=collate_fns[args.task_type])
+                                     collate_fn=collate_fn)
 
         # Eval!
         logger.info("********* Running evaluation {} ********".format(prefix))
@@ -332,7 +336,7 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         # Note that DistributedSampler samples randomly
         pred_sampler = SequentialSampler(pred_dataset) if args.local_rank == -1 else DistributedSampler(pred_dataset)
         pred_dataloader = DataLoader(pred_dataset, sampler=pred_sampler, batch_size=args.pred_batch_size,
-                                     collate_fn=collate_fns[args.task_type])
+                                     collate_fn=collate_fn)
 
         logger.info("******** Running prediction {} ********".format(prefix))
         logger.info("  Num examples = %d", len(pred_dataset))
@@ -376,7 +380,10 @@ def predict(args, model, tokenizer, label_list, prefix=""):
 
         output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.txt")
         # 保存标签结果
-        write_conll09_argument_label(true_predict_label, pred_examples, output_submit_file)
+        if args.task_name.endswith('sense'):
+            write_conll09_predicate_sense(true_predict_label, pred_examples, output_submit_file)
+        else:
+            write_conll09_argument_label(true_predict_label, pred_examples, output_submit_file)
                 
         # 保存中间预测结果
         #output_logits_file = os.path.join(pred_output_dir, prefix, "test_logits")

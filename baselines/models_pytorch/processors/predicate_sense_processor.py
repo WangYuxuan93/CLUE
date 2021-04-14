@@ -6,7 +6,7 @@ import torch
 import numpy as np
 from torch.utils.data import TensorDataset
 from .utils import DataProcessor
-from .common import conll09_chinese_label_mapping, conll09_english_label_mapping
+from .common import conll09_chinese_sense_mapping, conll09_english_sense_mapping
 from processors.processor import cached_features_filename
 from processors.srl_processor import SrlProcessor, align_flatten_heads
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class InputPredicateSenseExample(object):
     """A single training/test example for simple sequence classification."""
 
-    def __init__(self, guid, sid, tokens_a, pred_id, 
+    def __init__(self, guid, sid, tokens_a, pred_ids, 
                  tokens_b=None, labels=None, pos_tags=None, 
                  syntax_heads=None, syntax_rels=None):
         """Constructs a InputExample.
@@ -26,7 +26,7 @@ class InputPredicateSenseExample(object):
         """
         self.guid = guid
         self.sid = sid
-        self.pred_id = pred_id # predicate idx
+        self.pred_ids = pred_ids # predicate idx
         self.tokens_a = tokens_a
         self.tokens_b = tokens_b
         self.labels = labels
@@ -35,7 +35,7 @@ class InputPredicateSenseExample(object):
         self.syntax_rels = syntax_rels
 
     def show(self):
-        logger.info("guid={}, sid={}, pred_id={}".format(self.guid, self.sid, self.pred_id))
+        logger.info("guid={}, sid={}, pred_ids={}".format(self.guid, self.sid, self.pred_ids))
         logger.info("tokens_a={}, tokens_b={}".format(self.tokens_a, self.tokens_b))
         logger.info("labels={}".format(self.labels))
         logger.info("pos_tags={}".format(self.pos_tags))
@@ -66,53 +66,6 @@ class InputParsedPredicateSenseFeatures(object):
         self.dists = dists
 
 
-def argument_label_collate_fn(batch):
-    """
-    batch should be a list of (sequence, target, length) tuples...
-    Returns a padded tensor of sequences sorted from longest to shortest,
-    """
-    num_items = len(batch[0])
-    all_heads, all_rels, all_dists = None, None, None
-    if num_items == 5:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels = map(torch.stack, zip(*batch))
-    elif num_items == 7:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
-    elif num_items == 8:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
-    max_len = max(all_attention_mask.sum(-1)).item()
-    all_input_ids = all_input_ids[:, :max_len]
-    all_attention_mask = all_attention_mask[:, :max_len]
-    all_token_type_ids = all_token_type_ids[:, :max_len]
-    all_predicate_mask = all_predicate_mask[:, :max_len]
-    all_labels = all_labels[:, :max_len]
-    if num_items >= 7:
-        if all_heads.is_sparse:
-            all_heads = all_heads.to_dense()
-            all_rels = all_rels.to_dense()
-        if len(all_heads.size()) == 3:
-            all_heads = all_heads[:, :max_len, :max_len]
-        elif len(all_heads.size()) == 4:
-            all_heads = all_heads[:, :, :max_len, :max_len]
-        all_rels = all_rels[:, :max_len, :max_len]
-    if num_items == 8:
-        if all_dists.is_sparse:
-            all_dists = all_dists.to_dense()
-        all_dists = all_dists[:, :max_len, :max_len]
-    
-    batch = {}
-    batch["input_ids"] = all_input_ids
-    batch["attention_mask"] = all_attention_mask
-    batch["token_type_ids"] = all_token_type_ids
-    batch["predicate_mask"] = all_predicate_mask
-    batch["labels"] = all_labels
-    batch["heads"] = all_heads
-    batch["rels"] = all_rels
-    batch["dists"] = all_dists
-    return batch
-
-    #return all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_heads, all_rels, all_dists
-
-
 class PredicateSenseProcessor(SrlProcessor):
     def __init__(self, task):
         self.task = task
@@ -124,9 +77,9 @@ class PredicateSenseProcessor(SrlProcessor):
     def get_labels(self):
         """See base class."""
         if self.lan == 'zh':
-            self.label_map = conll09_chinese_label_mapping
+            self.label_map = conll09_chinese_sense_mapping
         elif self.lan == 'en':
-            self.label_map = conll09_english_label_mapping
+            self.label_map = conll09_english_sense_mapping
         return list(self.label_map.keys())
 
     def _create_examples(self, sents, set_type, use_pos=False):
@@ -142,14 +95,12 @@ class PredicateSenseProcessor(SrlProcessor):
                 pos_tags = None
             heads = [int(line[8]) for line in sent]
             rels = [line[10] for line in sent]
-            for j, pred_id in enumerate(pred_ids): # the j-th predicate
-                guid = "%s-%s" % (set_type, len(examples))
-                tokens_b = [tokens_a[pred_id]]
-                labels = [line[14+j] if line[14+j] != '_' else 'O' for line in sent]
-                examples.append(
-                    InputPredicateSenseExample(guid=guid, sid=sid, tokens_a=tokens_a, pred_id=pred_id, 
-                                    tokens_b=tokens_b, labels=labels, pos_tags=pos_tags,
-                                    syntax_heads=heads, syntax_rels=rels))
+            labels = [line[13].split('.')[1] if line[13] != '_' and line[12] == 'Y' else '<PAD>' for line in sent]
+            guid = "%s-%s" % (set_type, len(examples))
+            examples.append(
+                InputPredicateSenseExample(guid=guid, sid=sid, tokens_a=tokens_a, pred_ids=pred_ids, 
+                                tokens_b=None, labels=labels, pos_tags=pos_tags,
+                                syntax_heads=heads, syntax_rels=rels))
         return examples
 
 
@@ -195,7 +146,6 @@ def convert_examples_to_features(
 
     tokenized_inputs = tokenizer(
             [example.tokens_a for example in examples],
-            [example.tokens_b for example in examples],
             padding='max_length',
             max_length=max_length,
             is_split_into_words=True)
@@ -217,15 +167,19 @@ def convert_examples_to_features(
             elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
-                label_ids.append(label_map[example.labels[word_idx]])
+                label_id = label_map[example.labels[word_idx]]
+                if label_id == 0:
+                    label_id = -100
+                label_ids.append(label_id)
             else:
                 label_ids.append(-100)
             previous_word_idx = word_idx
         #labels.append(label_ids)
         predicate_mask = np.zeros(max_length, dtype=np.int32)
-        token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, example.pred_id)
-        # use the first token as predicate
-        predicate_mask[token_pred_ids[0]] = 1
+        for word_pred_id in example.pred_ids:
+            token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, word_pred_id)
+            # use the first token as predicate
+            predicate_mask[token_pred_ids[0]] = 1
 
         if ex_index < 5:
             logger.info("*** Example ***")
@@ -236,7 +190,7 @@ def convert_examples_to_features(
             logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
             logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
             logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-            logger.info("pred_id: %d, token_pred_id: %d, predicate_mask: %s" % (example.pred_id, token_pred_ids[0], " ".join([str(x) for x in predicate_mask])))
+            logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
             logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
 
         features.append(
@@ -299,7 +253,6 @@ def convert_parsed_examples_to_features(
 
     tokenized_inputs = tokenizer(
             [example.tokens_a for example in examples],
-            [example.tokens_b for example in examples],
             padding='max_length',
             max_length=max_length,
             is_split_into_words=True)
@@ -354,9 +307,10 @@ def convert_parsed_examples_to_features(
             previous_word_idx = word_idx
         #labels.append(label_ids)
         predicate_mask = np.zeros(max_length, dtype=np.int32)
-        token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, example.pred_id)
-        # use the first token as predicate
-        predicate_mask[token_pred_ids[0]] = 1
+        for word_pred_id in example.pred_ids:
+            token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, word_pred_id)
+            # use the first token as predicate
+            predicate_mask[token_pred_ids[0]] = 1
 
         if ex_index < 5:
             logger.info("*** Example ***")
@@ -367,7 +321,7 @@ def convert_parsed_examples_to_features(
             logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
             logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
             logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-            logger.info("pred_id: %d, token_pred_id: %d, predicate_mask: %s" % (example.pred_id, token_pred_ids[0], " ".join([str(x) for x in predicate_mask])))
+            logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
             logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
             torch.set_printoptions(profile="full")
             print ("\nheads:\n", heads[ex_index])

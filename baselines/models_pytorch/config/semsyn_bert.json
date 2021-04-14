@@ -27,11 +27,11 @@
   "vocab_size": 21128,
   "fusion_type": "top",
   "graph": {
-    "encoder": "GCN",
+    "encoder": "GAT",
     "structured_layers": [9,10,11],
-    "data_flow": "bidir",
-    "use_output_layer": true,
-    "use_ff_layer": true,
+    "data_flow": "h2c",
+    "use_output_layer": false,
+    "use_ff_layer": false,
     "use_task_aggregation": false,
     "use_data_flow_gate": false,
     "data_flow_gate": "HighwayGateLayer",
@@ -45,8 +45,12 @@
     "use_fusion_gate": false,
     "fusion_gate": "ConstantGateLayer",
     "fusion_gate_const": 0.2,
-    "use_rel_embedding": true,
+    "use_rel_embedding": false,
     "rel_embed_size": 64,
     "num_basic_matrix": 3
+  },
+  "srl":{
+    "use_predicate_indicator": false,
+    "use_bilstm": false
   }
 }

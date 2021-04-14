@@ -580,10 +580,10 @@ class BertForPredicateSense(BertPreTrainedModel):
             loss_fct = CrossEntropyLoss()
             # Only keep active parts of the loss
             if attention_mask is not None:
-                active_loss = attention_mask.view(-1) == 1
+                active_loss = attention_mask.contiguous().view(-1) == 1
                 active_logits = logits.view(-1, self.num_labels)
                 active_labels = torch.where(
-                    active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
+                    active_loss, labels.contiguous().view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
                 )
                 loss = loss_fct(active_logits, active_labels)
             else:

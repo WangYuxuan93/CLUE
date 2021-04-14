@@ -6,24 +6,74 @@ import torch
 import numpy as np
 from torch.utils.data import TensorDataset
 from processors.processor import cached_features_filename
-from processors.argument_label_processor import ArgumentLabelProcessor, argument_label_collate_fn
-from processors.argument_label_processor import convert_examples_to_features as arg_label_convert_examples_to_features
-from processors.argument_label_processor import convert_parsed_examples_to_features as arg_label_convert_parsed_examples_to_features
+from processors.argument_label_processor import ArgumentLabelProcessor
+from processors.argument_label_processor import convert_examples_to_features as arg_convert_examples_to_features
+from processors.argument_label_processor import convert_parsed_examples_to_features as arg_convert_parsed_examples_to_features
+
+from processors.predicate_sense_processor import PredicateSenseProcessor
+from processors.predicate_sense_processor import convert_examples_to_features as sense_convert_examples_to_features
+from processors.predicate_sense_processor import convert_parsed_examples_to_features as sense_convert_parsed_examples_to_features
+
 
 logger = logging.getLogger(__name__)
 
 converters = {
-    'arg': arg_label_convert_examples_to_features,
+    'arg': arg_convert_examples_to_features,
+    'sense': sense_convert_examples_to_features,
 }
 parsed_converters = {
-    'arg': arg_label_convert_parsed_examples_to_features,
-}
-collate_fns = {
-    'arg': argument_label_collate_fn,
+    'arg': arg_convert_parsed_examples_to_features,
+    'sense': sense_convert_parsed_examples_to_features,
 }
 processors = {
     'arg': ArgumentLabelProcessor,
+    'sense': PredicateSenseProcessor,
 }
+
+def collate_fn(batch):
+    """
+    batch should be a list of (sequence, target, length) tuples...
+    Returns a padded tensor of sequences sorted from longest to shortest,
+    """
+    num_items = len(batch[0])
+    all_heads, all_rels, all_dists = None, None, None
+    if num_items == 5:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels = map(torch.stack, zip(*batch))
+    elif num_items == 7:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 8:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
+    max_len = max(all_attention_mask.sum(-1)).item()
+    all_input_ids = all_input_ids[:, :max_len]
+    all_attention_mask = all_attention_mask[:, :max_len]
+    all_token_type_ids = all_token_type_ids[:, :max_len]
+    all_predicate_mask = all_predicate_mask[:, :max_len]
+    all_labels = all_labels[:, :max_len]
+    if num_items >= 7:
+        if all_heads.is_sparse:
+            all_heads = all_heads.to_dense()
+            all_rels = all_rels.to_dense()
+        if len(all_heads.size()) == 3:
+            all_heads = all_heads[:, :max_len, :max_len]
+        elif len(all_heads.size()) == 4:
+            all_heads = all_heads[:, :, :max_len, :max_len]
+        all_rels = all_rels[:, :max_len, :max_len]
+    if num_items == 8:
+        if all_dists.is_sparse:
+            all_dists = all_dists.to_dense()
+        all_dists = all_dists[:, :max_len, :max_len]
+    
+    batch = {}
+    batch["input_ids"] = all_input_ids
+    batch["attention_mask"] = all_attention_mask
+    batch["token_type_ids"] = all_token_type_ids
+    batch["predicate_mask"] = all_predicate_mask
+    batch["labels"] = all_labels
+    batch["heads"] = all_heads
+    batch["rels"] = all_rels
+    batch["dists"] = all_dists
+    return batch
+
 
 def load_and_cache_examples(args, task, tokenizer, data_type='train', return_examples=False):
     if args.local_rank not in [-1, 0] and not evaluate:

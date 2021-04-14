@@ -1,4 +1,34 @@
 
+def write_conll09_predicate_sense(predict_labels, examples, output_file):
+	with open(output_file, "w") as writer:
+		for pred, example in zip(predict_labels, examples):
+			pred_ids = example.pred_ids
+			words = example.tokens_a
+			tags = example.pos_tags
+			heads = example.syntax_heads
+			rels = example.syntax_rels
+			output = []
+			i = 0
+			for j, word in enumerate(words):
+				items = ['_'] * 14
+				items[0] = str(j+1)
+				items[1] = word
+				items[2] = word
+				items[3] = word
+				items[4] = tags[j]
+				items[5] = tags[j]
+				items[8] = str(heads[j])
+				items[9] = str(heads[j])
+				items[10] = rels[j]
+				items[11] = rels[j]
+				if j in pred_ids:
+					items[-2] = 'Y'
+					items[-1] = pred[i]
+					i += 1
+				rel_items = ['_' for _ in range(len(pred_ids))]
+				output.append('\t'.join(items+rel_items))
+			writer.write('\n'.join(output)+'\n\n')
+
 
 def write_conll09_argument_label(predict_labels, examples, output_file):
 	with open(output_file, "w") as writer:
