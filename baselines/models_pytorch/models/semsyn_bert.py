@@ -951,12 +951,17 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
-        indicator_embed_size = 10
+        self.use_predicate_indicator = config.srl["use_predicate_indicator"]
+        if self.use_predicate_indicator:
+            indicator_embed_size = 10
+            self.predicate_indicator_embedding = nn.Embedding(2, indicator_embed_size)
+        else:
+            indicator_embed_size = 0
+
         self.num_labels = config.num_labels
 
         self.bert = SemSynBertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.predicate_indicator_embedding = nn.Embedding(2, indicator_embed_size)
         self.classifier = nn.Linear(config.hidden_size+indicator_embed_size, config.num_labels)
 
         self.init_weights()
@@ -998,11 +1003,12 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
             rels=rels,
         )
 
-        predicate_indicator_embed = self.predicate_indicator_embedding(predicate_mask.long())
-
         sequence_output = outputs[0]
 
-        sequence_output = torch.cat([sequence_output, predicate_indicator_embed], dim=-1)
+        if self.use_predicate_indicator:
+            predicate_indicator_embed = self.predicate_indicator_embedding(predicate_mask.long())
+            sequence_output = torch.cat([sequence_output, predicate_indicator_embed], dim=-1)
+
         sequence_output = self.dropout(sequence_output)
         logits = self.classifier(sequence_output)
 
