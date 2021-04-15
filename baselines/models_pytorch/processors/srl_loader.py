@@ -147,6 +147,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         if biaffine_parser is None and not args.use_gold_syntax:
             features = converters[task_type](examples,
                                             tokenizer,
+                                            task=args.task_name,
                                             label_list=label_list,
                                             max_length=args.max_seq_length,
                                             output_mode=output_mode,
@@ -159,6 +160,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
             features = parsed_converters[task_type](examples,
                                                     tokenizer,
                                                     biaffine_parser,
+                                                    task=args.task_name,
                                                     label_list=label_list,
                                                     max_length=args.max_seq_length,
                                                     output_mode=output_mode,

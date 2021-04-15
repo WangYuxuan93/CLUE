@@ -62,11 +62,7 @@ class InputParsedPredicateSenseFeatures(object):
 
 class PredicateSenseProcessor(SrlProcessor):
     def __init__(self, task):
-        self.task = task
-        if task is None:
-            self.lan = 'zh'
-        else:
-            self.lan = task.split('-')[1]
+        super().__init__(task)
 
     def get_labels(self):
         """See base class."""
@@ -142,8 +138,9 @@ def convert_examples_to_features(
             [example.words for example in examples],
             padding='max_length',
             max_length=max_length,
-            is_split_into_words=True)
-
+            is_split_into_words=True,
+            return_token_type_ids=True)
+    print ("tokenized_inputs:\n", tokenized_inputs)
     features = []
     #labels = []
     for (ex_index, example) in enumerate(examples):
@@ -249,7 +246,8 @@ def convert_parsed_examples_to_features(
             [example.words for example in examples],
             padding='max_length',
             max_length=max_length,
-            is_split_into_words=True)
+            is_split_into_words=True,
+            return_token_type_ids=True)
     
     if use_gold_syntax:
         heads, rels = align_flatten_heads(
@@ -295,7 +293,10 @@ def convert_parsed_examples_to_features(
             elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
-                label_ids.append(label_map[example.pred_senses[word_idx]])
+                label_id = label_map[example.pred_senses[word_idx]]
+                if label_id == 0:
+                    label_id = -100
+                label_ids.append(label_id)
             else:
                 label_ids.append(-100)
             previous_word_idx = word_idx

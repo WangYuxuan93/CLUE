@@ -17,7 +17,7 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 
-from transformers import (WEIGHTS_NAME, AutoTokenizer)
+from transformers import (WEIGHTS_NAME, AutoTokenizer, RobertaConfig)
 
 from transformers import AdamW, get_linear_schedule_with_warmup
 from metrics.srl_compute_metrics import compute_metrics
@@ -29,24 +29,26 @@ from tools.progressbar import ProgressBar
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
+from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForArgumentLabel, SemSynRobertaForPredicateSense
 from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
+from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
 from io_utils.srl_writer import write_conll09_predicate_sense, write_conll09_argument_label
 import shutil
 import re
 from pathlib import Path
 
-SBERT_MODEL = {
-    'conll09-zh-arg': SemSynBertForArgumentLabel,
-    'conll09-en-arg': SemSynBertForArgumentLabel,
-    'conll09-zh-sense': SemSynBertForPredicateSense,
-    'conll09-en-sense': SemSynBertForPredicateSense,
+SBERT_CLASSES = {
+    'conll09-zh-arg': (SemSynBertConfig, SemSynBertForArgumentLabel),
+    'conll09-en-arg': (SemSynRobertaConfig, SemSynRobertaForArgumentLabel),
+    'conll09-zh-sense': (SemSynBertConfig, SemSynBertForPredicateSense),
+    'conll09-en-sense': (SemSynRobertaConfig, SemSynRobertaForPredicateSense)
 }
 
 MODEL_CLASSES = {
     'conll09-zh-arg': (BertConfig, BertForArgumentLabel, AutoTokenizer),
-    'conll09-en-arg': (BertConfig, BertForArgumentLabel, AutoTokenizer),
+    'conll09-en-arg': (RobertaConfig, RobertaForArgumentLabel, AutoTokenizer),
     'conll09-zh-sense': (BertConfig, BertForPredicateSense, AutoTokenizer),
-    'conll09-en-sense': (BertConfig, BertForPredicateSense, AutoTokenizer),
+    'conll09-en-sense': (RobertaConfig, RobertaForPredicateSense, AutoTokenizer),
 }
 
 
@@ -553,21 +555,21 @@ def main():
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     if args.parser_model is not None or args.use_gold_syntax:
-        config = SemSynBertConfig.from_pretrained(
+        config_class, model_class = SBERT_CLASSES[args.task_name]
+        config = config_class.from_pretrained(
                         args.config_name if args.config_name else args.model_name_or_path)
         config.num_labels=num_labels
 
         tokenizer = AutoTokenizer.from_pretrained(
                         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-                        use_fast=True,)
+                        use_fast=True, add_prefix_space=True)
         if args.use_gold_syntax:
             config.graph["num_rel_labels"] = len(processor.get_syntax_label_map())
         else:
             label_path = os.path.join(args.parser_model, "alphabets/type.json")
             parser_label2id = load_labels_from_json(label_path)
             config.graph["num_rel_labels"] = len(parser_label2id)
-        
-        model_class = SBERT_MODEL[args.task_name]
+
         model = model_class.from_pretrained(args.model_name_or_path, config=config)
         tokenizer_class = AutoTokenizer
     else:
@@ -577,7 +579,7 @@ def main():
         config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                               num_labels=num_labels, finetuning_task=args.task_name)
         tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-                                                    do_lower_case=args.do_lower_case, use_fast=True,)
+                                                    do_lower_case=args.do_lower_case, use_fast=True, add_prefix_space=True)
         model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path),
                                             config=config)
 

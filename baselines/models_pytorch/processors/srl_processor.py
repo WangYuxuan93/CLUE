@@ -36,6 +36,7 @@ class InputConll09Example(object):
     def show(self):
         logger.info("guid={}, sid={}, pred_ids={}".format(self.guid, self.sid, self.pred_ids))
         logger.info("words={}".format(self.words))
+        logger.info("pred_senses={}".format(self.pred_senses))
         logger.info("arg_labels={}".format(self.arg_labels))
         logger.info("pos_tags={}".format(self.pos_tags))
 

@@ -68,11 +68,7 @@ class InputParsedArgumentLabelFeatures(object):
 
 class ArgumentLabelProcessor(SrlProcessor):
     def __init__(self, task):
-        self.task = task
-        if task is None:
-            self.lan = 'zh'
-        else:
-            self.lan = task.split('-')[1]
+        super().__init__(task)
 
     def get_labels(self):
         """See base class."""
@@ -166,7 +162,8 @@ def convert_examples_to_features(
             [example.tokens_b for example in examples],
             padding='max_length',
             max_length=max_length,
-            is_split_into_words=True)
+            is_split_into_words=True,
+            return_token_type_ids=True)
 
     features = []
     #labels = []
@@ -273,7 +270,8 @@ def convert_parsed_examples_to_features(
             [example.tokens_b for example in examples],
             padding='max_length',
             max_length=max_length,
-            is_split_into_words=True)
+            is_split_into_words=True,
+            return_token_type_ids=True)
     
     if use_gold_syntax:
         heads, rels = align_flatten_heads(

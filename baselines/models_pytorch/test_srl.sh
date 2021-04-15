@@ -4,14 +4,13 @@
 # @Last Modified by:   bo.shi
 # @Last Modified time: 2020-01-01 11:46:07
 
-TASK_NAME="conll09-zh-sense"
-MODEL_NAME="bert-base-chinese"
+lan=zh
+TASK_NAME="conll09-$lan-sense"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
-#export BERT_PRETRAINED_MODELS_DIR=$CURRENT_DIR/prev_trained_model
-export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/chinese-roberta-wwm-ext
-export BERT_WWM_DIR=$BERT_PRETRAINED_MODELS_DIR/$MODEL_NAME
-export DATA_DIR=$CURRENT_DIR/data
+export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/models/$lan-roberta-base
+#export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/models/roberta-base
+export DATA_DIR=$CURRENT_DIR/data/$lan
 PARSER_MODEL=/mnt/hgfs/share/parser_model/zh-news-biaf-basic
 
 # make output dir
@@ -29,8 +28,7 @@ if [ $# == 0 ]; then
       --model_name_or_path=$BERT_PRETRAINED_MODELS_DIR \
       --task_name=$TASK_NAME \
       --parser_type=sdp \
-      --config_name=config/semsyn_bert.json \
-      --use_gold_syntax \
+      --config_name=config/semsyn_$lan.json \
       --parser_lm_path=$BERT_PRETRAINED_MODELS_DIR \
       --parser_align_type pkuseg \
       --parser_expand_type copy-word \
@@ -45,10 +43,10 @@ if [ $# == 0 ]; then
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=2 \
       --learning_rate=5e-5 \
-      --num_train_epochs=5.0 \
+      --num_train_epochs=20.0 \
       --max_steps=0 \
-      --logging_steps=5 \
-      --save_steps=5 \
+      --logging_steps=10 \
+      --save_steps=10 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/model \
       --overwrite_output_dir \
       --seed=42
