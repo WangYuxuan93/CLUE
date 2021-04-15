@@ -11,6 +11,35 @@ from .common import conll09_chinese_syntax_label_mapping, conll09_english_syntax
 
 logger = logging.getLogger(__name__)
 
+class InputConll09Example(object):
+    """A single training/test example for simple sequence classification."""
+
+    def __init__(self, guid, sid, words, pred_ids, 
+                 pred_senses=None, arg_labels=None, pos_tags=None, 
+                 syntax_heads=None, syntax_rels=None):
+        """Constructs a InputExample.
+        Args:
+            guid: Unique id for the example.
+            text_a: string. The untokenized text of the first sequence. For single
+            label: (Optional) list. The srl label for each of the argument
+        """
+        self.guid = guid
+        self.sid = sid
+        self.pred_ids = pred_ids # predicate idx
+        self.words = words
+        self.pred_senses = pred_senses
+        self.arg_labels = arg_labels
+        self.pos_tags = pos_tags
+        self.syntax_heads = syntax_heads
+        self.syntax_rels = syntax_rels
+
+    def show(self):
+        logger.info("guid={}, sid={}, pred_ids={}".format(self.guid, self.sid, self.pred_ids))
+        logger.info("words={}".format(self.words))
+        logger.info("arg_labels={}".format(self.arg_labels))
+        logger.info("pos_tags={}".format(self.pos_tags))
+
+
 class SrlProcessor(DataProcessor):
     def __init__(self, task):
         self.task = task
@@ -66,9 +95,30 @@ class SrlProcessor(DataProcessor):
                 pred_senses.append(line[13])
         return pred_ids, pred_senses
 
-    def _create_examples(self, sents, set_type, use_pos=False):
+    def _create_examples(self, sents, set_type, use_pos=False, is_test=False):
         """Creates examples for the training and dev sets."""
-        raise NameError("_create_examples() is not defined!")
+        examples = []
+        for (i, sent) in enumerate(sents):
+            sid = "%s-%s" % (set_type, i)
+            pred_ids, _ = self.get_pred_ids(sent)
+            words = [line[1] for line in sent]
+            if use_pos:
+                pos_tags = [line[5] for line in sent]
+            else:
+                pos_tags = None
+            heads = [int(line[8]) for line in sent]
+            rels = [line[10] for line in sent]
+            pred_senses = [line[13].split('.')[1] if line[13] != '_' and line[12] == 'Y' else '<PAD>' for line in sent]
+            arg_labels = []
+            for j in range(len(pred_ids)):
+                arg_labels.append([line[14+j] if line[14+j] != '_' else 'O' for line in sent])
+            guid = "%s-%s" % (set_type, len(examples))
+            examples.append(
+                InputConll09Example(guid=guid, sid=sid, words=words, pred_ids=pred_ids, 
+                                pred_senses=pred_senses, arg_labels=arg_labels, pos_tags=pos_tags,
+                                syntax_heads=heads, syntax_rels=rels))
+        return examples
+
 
 def get_word2token_map(word_ids, lengths, debug=False):
     assert len(word_ids) == len(lengths)

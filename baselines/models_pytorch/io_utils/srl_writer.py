@@ -3,7 +3,7 @@ def write_conll09_predicate_sense(predict_labels, examples, output_file):
 	with open(output_file, "w") as writer:
 		for pred, example in zip(predict_labels, examples):
 			pred_ids = example.pred_ids
-			words = example.tokens_a
+			words = example.words
 			tags = example.pos_tags
 			heads = example.syntax_heads
 			rels = example.syntax_rels
@@ -93,6 +93,10 @@ def write_conll09_argument_label(predict_labels, examples, output_file):
 			rels = rels_list[i]
 			labels = labels_list[i]
 			output = []
+			#print ("labels: ", labels)
+			# there is not real predicate
+			if len(labels[0]) == 0:
+				pred_ids = []
 			for j, word in enumerate(words):
 				items = ['_'] * 14
 				items[0] = str(j+1)
@@ -108,6 +112,9 @@ def write_conll09_argument_label(predict_labels, examples, output_file):
 				if j in pred_ids:
 					items[-2] = 'Y'
 					items[-1] = word+'.01'
-				rel_items = [label[j] if label[j] not in ['O','<PAD>'] else '_' for label in labels]
-				output.append('\t'.join(items+rel_items))
+				if len(labels[0]) > 0:
+					rel_items = [label[j] if label[j] not in ['O','<PAD>'] else '_' for label in labels]
+					output.append('\t'.join(items+rel_items))
+				else:
+					output.append('\t'.join(items))
 			writer.write('\n'.join(output)+'\n\n')

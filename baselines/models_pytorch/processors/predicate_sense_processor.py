@@ -12,18 +12,12 @@ from processors.srl_processor import SrlProcessor, align_flatten_heads
 
 logger = logging.getLogger(__name__)
 
+"""
 class InputPredicateSenseExample(object):
-    """A single training/test example for simple sequence classification."""
 
     def __init__(self, guid, sid, tokens_a, pred_ids, 
                  tokens_b=None, labels=None, pos_tags=None, 
                  syntax_heads=None, syntax_rels=None):
-        """Constructs a InputExample.
-        Args:
-            guid: Unique id for the example.
-            text_a: string. The untokenized text of the first sequence. For single
-            label: (Optional) list. The srl label for each of the argument
-        """
         self.guid = guid
         self.sid = sid
         self.pred_ids = pred_ids # predicate idx
@@ -39,7 +33,7 @@ class InputPredicateSenseExample(object):
         logger.info("tokens_a={}, tokens_b={}".format(self.tokens_a, self.tokens_b))
         logger.info("labels={}".format(self.labels))
         logger.info("pos_tags={}".format(self.pos_tags))
-
+"""
 
 class InputPredicateSenseFeatures(object):
     """A single set of features of data."""
@@ -82,8 +76,8 @@ class PredicateSenseProcessor(SrlProcessor):
             self.label_map = conll09_english_sense_mapping
         return list(self.label_map.keys())
 
+    """
     def _create_examples(self, sents, set_type, use_pos=False):
-        """Creates examples for the training and dev sets."""
         examples = []
         for (i, sent) in enumerate(sents):
             sid = "%s-%s" % (set_type, i)
@@ -102,7 +96,7 @@ class PredicateSenseProcessor(SrlProcessor):
                                 tokens_b=None, labels=labels, pos_tags=pos_tags,
                                 syntax_heads=heads, syntax_rels=rels))
         return examples
-
+    """
 
 def convert_examples_to_features(
         examples, 
@@ -145,7 +139,7 @@ def convert_examples_to_features(
     label_map = {label: i for i, label in enumerate(label_list)}
 
     tokenized_inputs = tokenizer(
-            [example.tokens_a for example in examples],
+            [example.words for example in examples],
             padding='max_length',
             max_length=max_length,
             is_split_into_words=True)
@@ -167,7 +161,7 @@ def convert_examples_to_features(
             elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
-                label_id = label_map[example.labels[word_idx]]
+                label_id = label_map[example.pred_senses[word_idx]]
                 if label_id == 0:
                     label_id = -100
                 label_ids.append(label_id)
@@ -191,7 +185,7 @@ def convert_examples_to_features(
             logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
             logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
             logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
-            logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
+            logger.info("labels: %s (ids = %s)" % (" ".join(example.pred_senses), " ".join([str(l) for l in label_ids])))
 
         features.append(
             InputPredicateSenseFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
@@ -252,7 +246,7 @@ def convert_parsed_examples_to_features(
     label_map = {label: i for i, label in enumerate(label_list)}
 
     tokenized_inputs = tokenizer(
-            [example.tokens_a for example in examples],
+            [example.words for example in examples],
             padding='max_length',
             max_length=max_length,
             is_split_into_words=True)
@@ -301,7 +295,7 @@ def convert_parsed_examples_to_features(
             elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
-                label_ids.append(label_map[example.labels[word_idx]])
+                label_ids.append(label_map[example.pred_senses[word_idx]])
             else:
                 label_ids.append(-100)
             previous_word_idx = word_idx
@@ -322,7 +316,7 @@ def convert_parsed_examples_to_features(
             logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
             logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
             logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
-            logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
+            logger.info("labels: %s (ids = %s)" % (" ".join(example.pred_senses), " ".join([str(l) for l in label_ids])))
             torch.set_printoptions(profile="full")
             print ("\nheads:\n", heads[ex_index])
             print ("\nrels:\n", rels[ex_index])

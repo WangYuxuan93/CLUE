@@ -82,8 +82,12 @@ class ArgumentLabelProcessor(SrlProcessor):
             self.label_map = conll09_english_label_mapping
         return list(self.label_map.keys())
 
-    def _create_examples(self, sents, set_type, use_pos=False):
-        """Creates examples for the training and dev sets."""
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True, is_test=True)
+
+    def _create_examples(self, sents, set_type, use_pos=False, is_test=False):
         examples = []
         for (i, sent) in enumerate(sents):
             sid = "%s-%s" % (set_type, i)
@@ -95,6 +99,17 @@ class ArgumentLabelProcessor(SrlProcessor):
                 pos_tags = None
             heads = [int(line[8]) for line in sent]
             rels = [line[10] for line in sent]
+            # add an empty example for predict test
+            if is_test and len(pred_ids) == 0:
+                guid = "%s-%s" % (set_type, len(examples))
+                pred_id = 0
+                tokens_b = [tokens_a[0]]
+                labels = ['<PAD>' for _ in sent]
+                examples.append(
+                    InputArgumentLabelExample(guid=guid, sid=sid, tokens_a=tokens_a, pred_id=pred_id, 
+                                    tokens_b=tokens_b, labels=labels, pos_tags=pos_tags,
+                                    syntax_heads=heads, syntax_rels=rels))
+                continue
             for j, pred_id in enumerate(pred_ids): # the j-th predicate
                 guid = "%s-%s" % (set_type, len(examples))
                 tokens_b = [tokens_a[pred_id]]
@@ -104,7 +119,7 @@ class ArgumentLabelProcessor(SrlProcessor):
                                     tokens_b=tokens_b, labels=labels, pos_tags=pos_tags,
                                     syntax_heads=heads, syntax_rels=rels))
         return examples
-
+    
 
 def convert_examples_to_features(
         examples, 
@@ -170,7 +185,10 @@ def convert_examples_to_features(
             elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
-                label_ids.append(label_map[example.labels[word_idx]])
+                label_id = label_map[example.labels[word_idx]]
+                if label_id == 0:
+                    label_id = -100
+                label_ids.append(label_id)
             else:
                 label_ids.append(-100)
             previous_word_idx = word_idx
@@ -301,7 +319,10 @@ def convert_parsed_examples_to_features(
             elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
-                label_ids.append(label_map[example.labels[word_idx]])
+                label_id = label_map[example.labels[word_idx]]
+                if label_id == 0:
+                    label_id = -100
+                label_ids.append(label_id)
             else:
                 label_ids.append(-100)
             previous_word_idx = word_idx
