@@ -78,10 +78,14 @@ class ArgumentLabelProcessor(SrlProcessor):
             self.label_map = conll09_english_label_mapping
         return list(self.label_map.keys())
 
-    def get_test_examples(self, data_dir):
+    def get_test_examples(self, data_dir, is_ood=False):
         """See base class."""
-        return self._create_examples(
-            self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True, is_test=True)
+        if is_ood:
+            return self._create_examples(
+                self._read_conll(os.path.join(data_dir, "test-ood.txt")), "test", use_pos=True, is_test=True)
+        else:
+            return self._create_examples(
+                self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True, is_test=True)
 
     def _create_examples(self, sents, set_type, use_pos=False, is_test=False):
         examples = []

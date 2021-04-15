@@ -68,10 +68,14 @@ class SrlProcessor(DataProcessor):
         return self._create_examples(
             self._read_conll(os.path.join(data_dir, "dev.txt")), "dev")
 
-    def get_test_examples(self, data_dir):
+    def get_test_examples(self, data_dir, is_ood=False):
         """See base class."""
-        return self._create_examples(
-            self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True)
+        if is_ood:
+            return self._create_examples(
+                self._read_conll(os.path.join(data_dir, "test-ood.txt")), "test", use_pos=True)
+        else:
+            return self._create_examples(
+                self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True)
 
     def get_labels(self):
         """See base class."""

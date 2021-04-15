@@ -324,13 +324,14 @@ def evaluate(args, model, tokenizer, prefix=""):
     return results
 
 
-def predict(args, model, tokenizer, label_list, prefix=""):
+def predict(args, model, tokenizer, label_list, prefix="", is_ood=False):
     pred_task_names = (args.task_name,)
     pred_outputs_dirs = (args.output_dir,)
     label_map = {i: label for i, label in enumerate(label_list)}
 
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
-        pred_dataset, pred_examples = load_and_cache_examples(args, pred_task, tokenizer, data_type='test', return_examples=True)
+        pred_dataset, pred_examples = load_and_cache_examples(args, pred_task, tokenizer, data_type='test', 
+                                                              return_examples=True, is_ood=is_ood)
         if not os.path.exists(pred_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(pred_output_dir)
 
@@ -340,7 +341,7 @@ def predict(args, model, tokenizer, label_list, prefix=""):
         pred_dataloader = DataLoader(pred_dataset, sampler=pred_sampler, batch_size=args.pred_batch_size,
                                      collate_fn=collate_fn)
 
-        logger.info("******** Running prediction {} ********".format(prefix))
+        logger.info("******** Running prediction {} ({}) ********".format(prefix, 'Out-Of-Domain' if is_ood else 'In-Domain'))
         logger.info("  Num examples = %d", len(pred_dataset))
         logger.info("  Batch size = %d", args.pred_batch_size)
         nb_pred_steps = 0
@@ -380,7 +381,8 @@ def predict(args, model, tokenizer, label_list, prefix=""):
             for pred, label in zip(preds, out_label_ids)
         ]
 
-        output_submit_file = os.path.join(pred_output_dir, prefix, "test_prediction.txt")
+        filename = "test-ood_prediction.txt" if is_ood else "test_prediction.txt"
+        output_submit_file = os.path.join(pred_output_dir, prefix, filename)
         # 保存标签结果
         if args.task_name.endswith('sense'):
             write_conll09_predicate_sense(true_predict_label, pred_examples, output_submit_file)
@@ -655,6 +657,8 @@ def main():
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
             predict(args, model, tokenizer, label_list, prefix=prefix)
+            if args.task_name.split('-')[1] == 'en':
+                predict(args, model, tokenizer, label_list, prefix=prefix, is_ood=True)
 
 
 if __name__ == "__main__":

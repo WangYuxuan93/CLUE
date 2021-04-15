@@ -75,7 +75,7 @@ def collate_fn(batch):
     return batch
 
 
-def load_and_cache_examples(args, task, tokenizer, data_type='train', return_examples=False):
+def load_and_cache_examples(args, task, tokenizer, data_type='train', return_examples=False, is_ood=False):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
@@ -84,7 +84,8 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     #elif task_type == 'sense':
 
     output_mode = 'srl'
-
+    if is_ood:
+        task += '-ood' # this should only work for naming files
     cached_examples_file = os.path.join(args.data_dir, 'cached_examples_{}_{}'.format(data_type, str(task)))
     if return_examples:
         if not os.path.exists(cached_examples_file):
@@ -93,7 +94,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
             elif data_type == 'dev':
                 examples = processor.get_dev_examples(args.data_dir)
             else:
-                examples = processor.get_test_examples(args.data_dir)
+                examples = processor.get_test_examples(args.data_dir, is_ood=is_ood)
             if args.local_rank in [-1, 0]:
                 logger.info("Saving examples into cached file %s", cached_examples_file)
                 torch.save(examples, cached_examples_file)
@@ -132,7 +133,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         elif data_type == 'dev':
             examples = processor.get_dev_examples(args.data_dir)
         else:
-            examples = processor.get_test_examples(args.data_dir)
+            examples = processor.get_test_examples(args.data_dir, is_ood=is_ood)
 
         if args.parser_model is not None:
             if args.parser_type == "dp":
