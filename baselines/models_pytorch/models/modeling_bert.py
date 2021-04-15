@@ -414,22 +414,7 @@ class BertForArgumentLabel(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.use_predicate_indicator = config.srl["use_predicate_indicator"]
-        if self.use_predicate_indicator:
-            print ("### use predicate_indicator ###")
-            indicator_embed_size = 10
-            self.predicate_indicator_embedding = nn.Embedding(2, indicator_embed_size)
-        else:
-            indicator_embed_size = 0
-
-        self.use_bilstm = config.srl["use_bilstm"]
-        if self.use_bilstm:
-            print ("### use bilstm ###")
-            self.bilstm = VarFastLSTM(config.hidden_size+indicator_embed_size, config.hidden_size, num_layers=1, batch_first=True, bidirectional=True, dropout=[0.33,0.33])
-            self.dense = nn.Linear(4*config.hidden_size, config.hidden_size)
-        else:
-            self.dense = nn.Linear(2*config.hidden_size+indicator_embed_size, config.hidden_size)
-
+        self.dense = nn.Linear(2*config.hidden_size, config.hidden_size)
         self.bert = BertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
@@ -472,13 +457,6 @@ class BertForArgumentLabel(BertPreTrainedModel):
 
         sequence_output = outputs[0]
 
-        if self.use_predicate_indicator:
-            predicate_indicator_embed = self.predicate_indicator_embedding(predicate_mask.long())
-            sequence_output = torch.cat([sequence_output, predicate_indicator_embed], dim=-1)
-
-        if self.use_bilstm:
-            sequence_output, _ = self.bilstm(sequence_output, attention_mask)
-
         # (batch, seq_len, hidden_size)
         sequence_output = self.dropout(sequence_output)
 
@@ -518,18 +496,11 @@ class BertForPredicateSense(BertPreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
-        self.use_predicate_indicator = config.srl["use_predicate_indicator"]
-        if self.use_predicate_indicator:
-            indicator_embed_size = 10
-            self.predicate_indicator_embedding = nn.Embedding(2, indicator_embed_size)
-        else:
-            indicator_embed_size = 0
-
         self.num_labels = config.num_labels
 
         self.bert = BertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size+indicator_embed_size, config.num_labels)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
         self.init_weights()
 
@@ -568,10 +539,6 @@ class BertForPredicateSense(BertPreTrainedModel):
 
         sequence_output = outputs[0]
 
-        if self.use_predicate_indicator:
-            predicate_indicator_embed = self.predicate_indicator_embedding(predicate_mask.long())
-            sequence_output = torch.cat([sequence_output, predicate_indicator_embed], dim=-1)
-        
         sequence_output = self.dropout(sequence_output)
         logits = self.classifier(sequence_output)
 
