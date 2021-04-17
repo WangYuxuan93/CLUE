@@ -346,7 +346,7 @@ class SemSynBertEncoder(nn.Module):
         self.use_ff_layer = "use_ff_layer" in self.config.graph and self.config.graph["use_ff_layer"]
         logger.info("###### SemSynBERT Encoder ######")
         logger.info("graph_encoder = {}, fusion_type = {}".format('GraphMask' if self.fusion_type =="mask" else self.graph_encoder, self.fusion_type))
-        if self.fusion_type=="residual":
+        if self.fusion_type in ["residual", "top"]:
             logger.info("use_output_layer = {}, use_ff_layer = {}".format(self.use_output_layer, self.use_ff_layer))
         logger.info("data_flow = {}, top num_layers = {}, structured_layers = {}".format(self.data_flow, 
                                                     self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A",
