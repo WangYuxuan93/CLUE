@@ -57,6 +57,8 @@ class GNNEncoderLayer(nn.Module):
         super().__init__()
         self.do_pal_project = config.graph["do_pal_project"]
         self.encoder_type = config.graph["encoder"]
+        self.use_output_layer = "use_output_layer" in config.graph and config.graph["use_output_layer"]
+        self.use_ff_layer = "use_ff_layer" in config.graph and config.graph["use_ff_layer"]
 
         if config.graph["do_pal_project"]:
             self.dense_down = nn.Linear(config.hidden_size, config.graph["lowrank_size"])
@@ -74,9 +76,11 @@ class GNNEncoderLayer(nn.Module):
             print ("###### Invalid GNN encoder_type: {} ######".format(self.encoder_type))
             exit()
 
-        self.attention_output = BertSelfOutput(config)
-        self.intermediate = BertIntermediate(config)
-        self.output = BertOutput(config)
+        if self.use_output_layer:
+            self.attention_output = BertSelfOutput(config)
+        if self.use_ff_layer:
+            self.intermediate = BertIntermediate(config)
+            self.output = BertOutput(config)
 
     def forward(
         self,
@@ -97,8 +101,15 @@ class GNNEncoderLayer(nn.Module):
         if self.do_pal_project:
             attention_hiddens = self.dense_up(attention_hiddens)
 
-        attention_output = self.attention_output(attention_hiddens, hidden_states)
-        intermediate_output = self.intermediate(attention_output)
-        layer_output = self.output(intermediate_output, attention_output)
+        if self.use_output_layer:
+            attention_output = self.attention_output(attention_hiddens, hidden_states)
+        else:
+            attention_output = attention_hiddens
+
+        if self.use_ff_layer:
+            intermediate_output = self.intermediate(attention_output)
+            layer_output = self.output(intermediate_output, attention_output)
+        else:
+            layer_output = attention_output
 
         return layer_output
