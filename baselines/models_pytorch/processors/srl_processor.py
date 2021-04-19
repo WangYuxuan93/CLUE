@@ -16,7 +16,7 @@ class InputConll09Example(object):
 
     def __init__(self, guid, sid, words, pred_ids, 
                  pred_senses=None, arg_labels=None, pos_tags=None, 
-                 syntax_heads=None, syntax_rels=None):
+                 gold_heads=None, gold_rels=None):
         """Constructs a InputExample.
         Args:
             guid: Unique id for the example.
@@ -30,8 +30,8 @@ class InputConll09Example(object):
         self.pred_senses = pred_senses
         self.arg_labels = arg_labels
         self.pos_tags = pos_tags
-        self.syntax_heads = syntax_heads
-        self.syntax_rels = syntax_rels
+        self.gold_heads = gold_heads
+        self.gold_rels = gold_rels
 
     def show(self):
         logger.info("guid={}, sid={}, pred_ids={}".format(self.guid, self.sid, self.pred_ids))
@@ -58,24 +58,32 @@ class SrlProcessor(DataProcessor):
                 sents.append([line.split() for line in lines])
         return sents
 
-    def get_train_examples(self, data_dir):
+    def get_examples(self, data_dir, data_type="train"):
         """See base class."""
+        filename = data_type+".txt"
+        is_test = False
+        if data_type.startswith("test"):
+            is_test = True
+        return self._create_examples(
+            self._read_conll(os.path.join(data_dir, filename)), data_type, use_pos=is_test, is_test=is_test)
+
+    """
+    def get_train_examples(self, data_dir):
         return self._create_examples(
             self._read_conll(os.path.join(data_dir, "train.txt")), "train")
 
     def get_dev_examples(self, data_dir):
-        """See base class."""
         return self._create_examples(
             self._read_conll(os.path.join(data_dir, "dev.txt")), "dev")
 
     def get_test_examples(self, data_dir, is_ood=False):
-        """See base class."""
         if is_ood:
             return self._create_examples(
                 self._read_conll(os.path.join(data_dir, "test-ood.txt")), "test", use_pos=True)
         else:
             return self._create_examples(
                 self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True)
+    """
 
     def get_labels(self):
         """See base class."""
@@ -113,6 +121,8 @@ class SrlProcessor(DataProcessor):
                 pos_tags = None
             heads = [int(line[8]) for line in sent]
             rels = [line[10] for line in sent]
+            pred_heads = [int(line[9]) for line in sent]
+            pred_rels = [line[11] for line in sent]
             pred_senses = [line[13].split('.')[1] if line[13] != '_' and line[12] == 'Y' else '<PAD>' for line in sent]
             arg_labels = []
             for j in range(len(pred_ids)):
@@ -121,7 +131,8 @@ class SrlProcessor(DataProcessor):
             examples.append(
                 InputConll09Example(guid=guid, sid=sid, words=words, pred_ids=pred_ids, 
                                 pred_senses=pred_senses, arg_labels=arg_labels, pos_tags=pos_tags,
-                                syntax_heads=heads, syntax_rels=rels))
+                                gold_heads=heads, gold_rels=rels, 
+                                pred_heads=pred_heads, pred_rels=pred_rels))
         return examples
 
 

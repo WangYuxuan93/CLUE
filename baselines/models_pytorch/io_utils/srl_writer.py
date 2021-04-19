@@ -5,8 +5,8 @@ def write_conll09_predicate_sense(predict_labels, examples, output_file):
 			pred_ids = example.pred_ids
 			words = example.words
 			tags = example.pos_tags
-			heads = example.syntax_heads
-			rels = example.syntax_rels
+			heads = example.gold_heads
+			rels = example.gold_rels
 			output = []
 			i = 0
 			for j, word in enumerate(words):
@@ -59,8 +59,8 @@ def write_conll09_argument_label(predict_labels, examples, output_file):
 				# start collecting data for a new sentence
 				prev_words = example.tokens_a
 				prev_tags = example.pos_tags
-				prev_heads = example.syntax_heads
-				prev_rels = example.syntax_rels
+				prev_heads = example.gold_heads
+				prev_rels = example.gold_rels
 				predicates = [example.pred_id]
 				labels = [pred]
 			else:

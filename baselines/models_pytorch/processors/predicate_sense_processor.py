@@ -12,29 +12,6 @@ from processors.srl_processor import SrlProcessor, align_flatten_heads
 
 logger = logging.getLogger(__name__)
 
-"""
-class InputPredicateSenseExample(object):
-
-    def __init__(self, guid, sid, tokens_a, pred_ids, 
-                 tokens_b=None, labels=None, pos_tags=None, 
-                 syntax_heads=None, syntax_rels=None):
-        self.guid = guid
-        self.sid = sid
-        self.pred_ids = pred_ids # predicate idx
-        self.tokens_a = tokens_a
-        self.tokens_b = tokens_b
-        self.labels = labels
-        self.pos_tags = pos_tags
-        self.syntax_heads = syntax_heads
-        self.syntax_rels = syntax_rels
-
-    def show(self):
-        logger.info("guid={}, sid={}, pred_ids={}".format(self.guid, self.sid, self.pred_ids))
-        logger.info("tokens_a={}, tokens_b={}".format(self.tokens_a, self.tokens_b))
-        logger.info("labels={}".format(self.labels))
-        logger.info("pos_tags={}".format(self.pos_tags))
-"""
-
 class InputPredicateSenseFeatures(object):
     """A single set of features of data."""
 
@@ -71,28 +48,6 @@ class PredicateSenseProcessor(SrlProcessor):
         elif self.lan == 'en':
             self.label_map = conll09_english_sense_mapping
         return list(self.label_map.keys())
-
-    """
-    def _create_examples(self, sents, set_type, use_pos=False):
-        examples = []
-        for (i, sent) in enumerate(sents):
-            sid = "%s-%s" % (set_type, i)
-            pred_ids, _ = self.get_pred_ids(sent)
-            tokens_a = [line[1] for line in sent]
-            if use_pos:
-                pos_tags = [line[5] for line in sent]
-            else:
-                pos_tags = None
-            heads = [int(line[8]) for line in sent]
-            rels = [line[10] for line in sent]
-            labels = [line[13].split('.')[1] if line[13] != '_' and line[12] == 'Y' else '<PAD>' for line in sent]
-            guid = "%s-%s" % (set_type, len(examples))
-            examples.append(
-                InputPredicateSenseExample(guid=guid, sid=sid, tokens_a=tokens_a, pred_ids=pred_ids, 
-                                tokens_b=None, labels=labels, pos_tags=pos_tags,
-                                syntax_heads=heads, syntax_rels=rels))
-        return examples
-    """
 
 def convert_examples_to_features(
         examples, 
@@ -253,8 +208,8 @@ def convert_parsed_examples_to_features(
         heads, rels = align_flatten_heads(
                         attention_mask=tokenized_inputs['attention_mask'],
                         word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
-                        flatten_heads=[example.syntax_heads for example in examples],
-                        flatten_rels=[example.syntax_rels for example in examples],
+                        flatten_heads=[example.gold_heads for example in examples],
+                        flatten_rels=[example.gold_rels for example in examples],
                         max_length=max_length,
                         syntax_label_map=processor.get_syntax_label_map(),
                         expand_type=expand_type,

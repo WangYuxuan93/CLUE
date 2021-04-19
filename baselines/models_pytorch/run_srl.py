@@ -328,10 +328,11 @@ def predict(args, model, tokenizer, label_list, prefix="", is_ood=False):
     pred_task_names = (args.task_name,)
     pred_outputs_dirs = (args.output_dir,)
     label_map = {i: label for i, label in enumerate(label_list)}
+    data_type = 'test-ood' if is_ood else 'test' 
 
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
-        pred_dataset, pred_examples = load_and_cache_examples(args, pred_task, tokenizer, data_type='test', 
-                                                              return_examples=True, is_ood=is_ood)
+        pred_dataset, pred_examples = load_and_cache_examples(args, pred_task, tokenizer, data_type=data_type, 
+                                                              return_examples=True)
         if not os.path.exists(pred_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(pred_output_dir)
 
