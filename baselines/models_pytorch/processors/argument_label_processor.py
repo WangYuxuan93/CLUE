@@ -41,6 +41,10 @@ class InputArgumentLabelExample(object):
         logger.info("guid={}, sid={}, pred_id={}".format(self.guid, self.sid, self.pred_id))
         logger.info("tokens_a={}, tokens_b={}".format(self.tokens_a, self.tokens_b))
         logger.info("labels={}".format(self.labels))
+        logger.info("gold_heads={}".format(self.gold_heads))
+        logger.info("gold_rels={}".format(self.gold_rels))
+        logger.info("pred_heads={}".format(self.pred_heads))
+        logger.info("pred_rels={}".format(self.pred_rels))
         logger.info("pos_tags={}".format(self.pos_tags))
 
 
@@ -80,16 +84,6 @@ class ArgumentLabelProcessor(SrlProcessor):
         elif self.lan == 'en':
             self.label_map = conll09_english_label_mapping
         return list(self.label_map.keys())
-
-    """
-    def get_test_examples(self, data_dir, is_ood=False):
-        if is_ood:
-            return self._create_examples(
-                self._read_conll(os.path.join(data_dir, "test-ood.txt")), "test", use_pos=True, is_test=True)
-        else:
-            return self._create_examples(
-                self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True, is_test=True)
-    """
 
     def _create_examples(self, sents, set_type, use_pos=False, is_test=False):
         examples = []
@@ -240,7 +234,7 @@ def convert_parsed_examples_to_features(
         pad_token=0,
         pad_token_segment_id=0,
         mask_padding_with_zero=True,
-        use_gold_syntax=True,
+        official_syntax_type="gold",
         expand_type="word",
         align_type="nltk",
         return_tensor=True,
@@ -285,12 +279,22 @@ def convert_parsed_examples_to_features(
             is_split_into_words=True,
             return_token_type_ids=True)
     
-    if use_gold_syntax:
+    if official_syntax_type == "gold":
         heads, rels = align_flatten_heads(
                         attention_mask=tokenized_inputs['attention_mask'],
                         word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
                         flatten_heads=[example.gold_heads for example in examples],
                         flatten_rels=[example.gold_rels for example in examples],
+                        max_length=max_length,
+                        syntax_label_map=processor.get_syntax_label_map(),
+                        expand_type=expand_type,
+                    )
+    elif official_syntax_type == "pred":
+        heads, rels = align_flatten_heads(
+                        attention_mask=tokenized_inputs['attention_mask'],
+                        word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+                        flatten_heads=[example.pred_heads for example in examples],
+                        flatten_rels=[example.pred_rels for example in examples],
                         max_length=max_length,
                         syntax_label_map=processor.get_syntax_label_map(),
                         expand_type=expand_type,

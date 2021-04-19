@@ -425,7 +425,8 @@ def main():
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--optim", default="AdamW", type=str, choices=["BERTAdam","AdamW"], help="Optimizer")
     ## SBERT parameters
-    parser.add_argument("--use_gold_syntax", action='store_true', help="Whether to use gold syntax tree")
+    #parser.add_argument("--use_gold_syntax", action='store_true', help="Whether to use gold syntax tree")
+    parser.add_argument("--official_syntax_type", default=None, type=str, choices=[None, "gold", "pred"], help="Type of the official syntax used")
     parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
     parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
@@ -557,7 +558,7 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    if args.parser_model is not None or args.use_gold_syntax:
+    if args.parser_model is not None or args.official_syntax_type:
         config_class, model_class = SBERT_CLASSES[args.task_name]
         config = config_class.from_pretrained(
                         args.config_name if args.config_name else args.model_name_or_path)
@@ -566,7 +567,7 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(
                         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                         use_fast=True, add_prefix_space=True)
-        if args.use_gold_syntax:
+        if args.official_syntax_type:
             config.graph["num_rel_labels"] = len(processor.get_syntax_label_map())
         else:
             label_path = os.path.join(args.parser_model, "alphabets/type.json")

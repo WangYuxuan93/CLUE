@@ -16,7 +16,8 @@ class InputConll09Example(object):
 
     def __init__(self, guid, sid, words, pred_ids, 
                  pred_senses=None, arg_labels=None, pos_tags=None, 
-                 gold_heads=None, gold_rels=None):
+                 gold_heads=None, gold_rels=None,
+                 pred_heads=None, pred_rels=None):
         """Constructs a InputExample.
         Args:
             guid: Unique id for the example.
@@ -32,12 +33,18 @@ class InputConll09Example(object):
         self.pos_tags = pos_tags
         self.gold_heads = gold_heads
         self.gold_rels = gold_rels
+        self.pred_heads = pred_heads
+        self.pred_rels = pred_rels
 
     def show(self):
         logger.info("guid={}, sid={}, pred_ids={}".format(self.guid, self.sid, self.pred_ids))
         logger.info("words={}".format(self.words))
         logger.info("pred_senses={}".format(self.pred_senses))
         logger.info("arg_labels={}".format(self.arg_labels))
+        logger.info("gold_heads={}".format(self.gold_heads))
+        logger.info("gold_rels={}".format(self.gold_rels))
+        logger.info("pred_heads={}".format(self.pred_heads))
+        logger.info("pred_rels={}".format(self.pred_rels))
         logger.info("pos_tags={}".format(self.pos_tags))
 
 
@@ -66,24 +73,6 @@ class SrlProcessor(DataProcessor):
             is_test = True
         return self._create_examples(
             self._read_conll(os.path.join(data_dir, filename)), data_type, use_pos=is_test, is_test=is_test)
-
-    """
-    def get_train_examples(self, data_dir):
-        return self._create_examples(
-            self._read_conll(os.path.join(data_dir, "train.txt")), "train")
-
-    def get_dev_examples(self, data_dir):
-        return self._create_examples(
-            self._read_conll(os.path.join(data_dir, "dev.txt")), "dev")
-
-    def get_test_examples(self, data_dir, is_ood=False):
-        if is_ood:
-            return self._create_examples(
-                self._read_conll(os.path.join(data_dir, "test-ood.txt")), "test", use_pos=True)
-        else:
-            return self._create_examples(
-                self._read_conll(os.path.join(data_dir, "test.txt")), "test", use_pos=True)
-    """
 
     def get_labels(self):
         """See base class."""

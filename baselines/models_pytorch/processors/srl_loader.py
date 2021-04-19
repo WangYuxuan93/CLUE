@@ -88,22 +88,15 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     if return_examples:
         if not os.path.exists(cached_examples_file):
             examples = processor.get_examples(args.data_dir, data_type)
-            """
-            if data_type == 'train':
-                examples = processor.get_train_examples(args.data_dir)
-            elif data_type == 'dev':
-                examples = processor.get_dev_examples(args.data_dir)
-            else:
-                examples = processor.get_test_examples(args.data_dir, is_ood=is_ood)
-            """
             if args.local_rank in [-1, 0]:
                 logger.info("Saving examples into cached file %s", cached_examples_file)
                 torch.save(examples, cached_examples_file)
         else:
             examples = torch.load(cached_examples_file)
     # Load data features from cache or dataset file
-    if args.use_gold_syntax:
-        parser_info = "gold-syntax"
+    if args.official_syntax_type: # gold or pred official syntax
+        parser_info = args.official_syntax_type+"-syntax"
+        #parser_info = "gold-syntax"
         if args.parser_return_tensor:
             parser_info += "-3d"
         if args.parser_compute_dist:
@@ -149,7 +142,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         else:
             biaffine_parser = None
 
-        if biaffine_parser is None and not args.use_gold_syntax:
+        if biaffine_parser is None and not args.official_syntax_type:
             features = converters[task_type](examples,
                                             tokenizer,
                                             task=args.task_name,
@@ -173,7 +166,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                                                     # pad on the left for xlnet
                                                     pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
                                                     pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
-                                                    use_gold_syntax=args.use_gold_syntax,
+                                                    official_syntax_type=args.official_syntax_type,
                                                     expand_type=args.parser_expand_type,
                                                     align_type=args.parser_align_type,
                                                     return_tensor=args.parser_return_tensor,
@@ -198,7 +191,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     all_predicate_mask = torch.tensor([f.predicate_mask for f in features], dtype=torch.long)
     all_labels = torch.tensor([f.label_ids for f in features], dtype=torch.long)
 
-    if args.parser_model is None and not args.use_gold_syntax:
+    if args.parser_model is None and not args.official_syntax_type:
         dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels)
     else:
         all_heads = torch.stack([f.heads for f in features])

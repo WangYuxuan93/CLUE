@@ -160,7 +160,7 @@ def convert_parsed_examples_to_features(
         pad_token=0,
         pad_token_segment_id=0,
         mask_padding_with_zero=True,
-        use_gold_syntax=True,
+        official_syntax_type="gold",
         expand_type="word",
         align_type="nltk",
         return_tensor=True,
@@ -204,12 +204,22 @@ def convert_parsed_examples_to_features(
             is_split_into_words=True,
             return_token_type_ids=True)
     
-    if use_gold_syntax:
+    if official_syntax_type == "gold":
         heads, rels = align_flatten_heads(
                         attention_mask=tokenized_inputs['attention_mask'],
                         word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
                         flatten_heads=[example.gold_heads for example in examples],
                         flatten_rels=[example.gold_rels for example in examples],
+                        max_length=max_length,
+                        syntax_label_map=processor.get_syntax_label_map(),
+                        expand_type=expand_type,
+                    )
+    elif official_syntax_type == "pred":
+        heads, rels = align_flatten_heads(
+                        attention_mask=tokenized_inputs['attention_mask'],
+                        word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+                        flatten_heads=[example.pred_heads for example in examples],
+                        flatten_rels=[example.pred_rels for example in examples],
                         max_length=max_length,
                         syntax_label_map=processor.get_syntax_label_map(),
                         expand_type=expand_type,
