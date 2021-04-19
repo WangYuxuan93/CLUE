@@ -97,7 +97,8 @@ conll09_chinese_syntax_label_mapping = {
     "CJTN6": 38,
     "CJTN7": 39,
     "CJTN8": 40,
-    "CJTN9": 41
+    "CJTN9": 41,
+    "<WORD>": 42
 }
 
 conll09_english_label_mapping = {
@@ -254,5 +255,6 @@ conll09_english_syntax_label_mapping = {
     "DIR-OPRD": 66,
     "LOC-MNR": 67,
     "GAP-OPRD": 68,
-    "GAP-SUB": 69
+    "GAP-SUB": 69,
+    "<WORD>": 70
 }

@@ -84,7 +84,7 @@ class SrlProcessor(DataProcessor):
         elif self.lan == 'en':
             self.syntax_label_map = conll09_english_syntax_label_mapping
         # label for inner-word arc
-        self.syntax_label_map['<WORD>'] = len(self.syntax_label_map)
+        #self.syntax_label_map['<WORD>'] = len(self.syntax_label_map)
         return self.syntax_label_map
 
     def get_pred_ids(self, sent):
