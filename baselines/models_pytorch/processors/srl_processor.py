@@ -136,6 +136,8 @@ def get_word2token_map(word_ids, lengths, debug=False):
             if len(wid2tid) == 0 or w != prev_word:
                 wid2tid.append([i])
                 prev_word = w
+            elif w == None: # this is for consecutive None ([SEP] tokens), such as in en-roberta
+                wid2tid.append([i])
             else:
                 wid2tid[-1].append(i)
         wid2tid_list.append(wid2tid)

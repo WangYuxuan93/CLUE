@@ -278,7 +278,6 @@ def convert_parsed_examples_to_features(
             max_length=max_length,
             is_split_into_words=True,
             return_token_type_ids=True)
-    
     if official_syntax_type == "gold":
         heads, rels = align_flatten_heads(
                         attention_mask=tokenized_inputs['attention_mask'],
