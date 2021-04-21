@@ -574,7 +574,7 @@ def main():
                                               num_labels=num_labels, finetuning_task=args.task_name)
         if args.official_syntax_type:
             config.graph["num_rel_labels"] = len(processor.get_syntax_label_map())
-        else:
+        elif args.parser_model is not None:
             label_path = os.path.join(args.parser_model, "alphabets/type.json")
             parser_label2id = load_labels_from_json(label_path)
             config.graph["num_rel_labels"] = len(parser_label2id)

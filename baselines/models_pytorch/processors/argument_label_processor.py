@@ -179,13 +179,16 @@ def convert_examples_to_features(
         word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
         token_type_ids = tokenized_inputs['token_type_ids'][ex_index]
         attention_mask = tokenized_inputs['attention_mask'][ex_index]
+        input_ids = tokenized_inputs['input_ids'][ex_index]
         previous_word_idx = None
         label_ids = []
+        valid_label_flag = True
         for word_idx in word_ids:
-            if word_idx is None:
-                label_ids.append(-100)
-            # argument must be in tokens_a and not pad
-            elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
+            #print ("word_idx: {}, flag: {}, input_id:{}".format(word_idx, valid_label_flag, input_ids[len(label_ids)]))
+            # the first time meets sep token, all following should be -100
+            if input_ids[len(label_ids)] == tokenizer.sep_token_id:
+                valid_label_flag = False
+            if not valid_label_flag or word_idx is None:
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
                 label_id = label_map[example.labels[word_idx]]
@@ -323,13 +326,16 @@ def convert_parsed_examples_to_features(
         word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
         token_type_ids = tokenized_inputs['token_type_ids'][ex_index]
         attention_mask = tokenized_inputs['attention_mask'][ex_index]
+        input_ids = tokenized_inputs['input_ids'][ex_index]
         previous_word_idx = None
         label_ids = []
+        valid_label_flag = True
         for word_idx in word_ids:
-            if word_idx is None:
-                label_ids.append(-100)
-            # argument must be in tokens_a and not pad
-            elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
+            #print ("word_idx: {}, flag: {}, input_id:{}".format(word_idx, valid_label_flag, input_ids[len(label_ids)]))
+            # the first time meets sep token, all following should be -100
+            if input_ids[len(label_ids)] == tokenizer.sep_token_id:
+                valid_label_flag = False
+            if not valid_label_flag or word_idx is None:
                 label_ids.append(-100)
             elif word_idx != previous_word_idx:
                 label_id = label_map[example.labels[word_idx]]
