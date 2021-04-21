@@ -204,7 +204,7 @@ def convert_examples_to_features(
         # use the first token as predicate
         predicate_mask[token_pred_ids[0]] = 1
 
-        if ex_index < 5:
+        if ex_index < 2:
             logger.info("*** Example ***")
             #logger.info("guid: %s" % (example.guid))
             #logger.info("sid: %s" % (example.sid))
@@ -351,7 +351,7 @@ def convert_parsed_examples_to_features(
         # use the first token as predicate
         predicate_mask[token_pred_ids[0]] = 1
 
-        if ex_index < 5:
+        if ex_index < 2:
             logger.info("*** Example ***")
             #logger.info("guid: %s" % (example.guid))
             #logger.info("sid: %s" % (example.sid))
