@@ -1,5 +1,5 @@
 
-def write_sdp_conllu(pred_heads, pred_rels, examples, output_file, label_map, debug=True):
+def write_sdp_conllu(pred_heads, pred_rels, examples, output_file, label_map, debug=False):
 	with open(output_file, "w") as writer:
 		sid = 0
 		for pred, example in zip(pred_heads, examples):
