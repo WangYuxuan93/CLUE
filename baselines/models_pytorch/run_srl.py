@@ -560,13 +560,18 @@ def main():
 
     if args.parser_model is not None or args.official_syntax_type:
         config_class, model_class = SBERT_CLASSES[args.task_name]
-        config = config_class.from_pretrained(
-                        args.config_name if args.config_name else args.model_name_or_path)
-        config.num_labels=num_labels
+        tokenizer_class = AutoTokenizer
+    else:
+        args.model_type = args.model_type.lower()
+        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.task_name]
 
-        tokenizer = AutoTokenizer.from_pretrained(
-                        args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
-                        use_fast=True, add_prefix_space=True)
+    if args.local_rank == 0:
+        torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
+    logger.info("Training/evaluation parameters %s", args)
+    # Training
+    if args.do_train:
+        config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+                                              num_labels=num_labels, finetuning_task=args.task_name)
         if args.official_syntax_type:
             config.graph["num_rel_labels"] = len(processor.get_syntax_label_map())
         else:
@@ -574,25 +579,11 @@ def main():
             parser_label2id = load_labels_from_json(label_path)
             config.graph["num_rel_labels"] = len(parser_label2id)
 
-        model = model_class.from_pretrained(args.model_name_or_path, config=config)
-        tokenizer_class = AutoTokenizer
-    else:
-        args.model_type = args.model_type.lower()
-        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.task_name]
-        # this is to test usefulness of indicator
-        config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
-                                              num_labels=num_labels, finetuning_task=args.task_name)
         tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                     do_lower_case=args.do_lower_case, use_fast=True, add_prefix_space=True)
-        model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path),
-                                            config=config)
-
-    if args.local_rank == 0:
-        torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
-    model.to(args.device)
-    logger.info("Training/evaluation parameters %s", args)
-    # Training
-    if args.do_train:
+        model = model_class.from_pretrained(args.model_name_or_path, config=config)
+        model.to(args.device)
+        
         train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, data_type='train')
         global_step, tr_loss, best_checkpoint = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
