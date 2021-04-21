@@ -557,34 +557,46 @@ class BertForPredicateSense(BertPreTrainedModel):
         return ((loss,) + output) if loss is not None else output
 
 
-class RobertaPreTrainedModel(PreTrainedModel):
-    """
-    An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
-    models.
-    """
+class BiaffineAttention(nn.Module):
+    def __init__(self, n_in, n_out=1, bias_x=True, bias_y=True):
+        super().__init__()
+        self.n_in = n_in
+        self.n_out = n_out
+        self.bias_x = bias_x
+        self.bias_y = bias_y
+        self.weight = nn.Parameter(torch.Tensor(n_out,
+                                                n_in + bias_x,
+                                                n_in + bias_y))
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        #nn.init.zeros_(self.weight)
+        nn.init.xavier_uniform_(self.weight)
 
-    config_class = RobertaConfig
-    base_model_prefix = "roberta"
+    def forward(self, x, y):
+        """
+        matmul(x, w)
+        x: [batch_size, 1, seq_len, h] => [batch_size, n_out, seq_len, h], stack n_out times
+        w: [n_out, h, h]) => [batch_size, n_out, h, h], stack batch_size times
+        output: [batch_size, n_out, seq_len, h]
+        """
+        if self.bias_x:
+            x = torch.cat([x, x.new_ones(x.shape[:-1]).unsqueeze(-1)], -1)
+        if self.bias_y:
+            y = torch.cat([y, y.new_ones(y.shape[:-1]).unsqueeze(-1)], -1)
+        # [batch_size, 1, seq_len, n_in+bias_x]
+        x = x.unsqueeze(1)
+        # [batch_size, 1, seq_len, n_in+bias_y]
+        y = y.unsqueeze(1)
+        # [batch_size, n_out, seq_len, seq_len]
+        # s = torch.matmul(torch.matmul(x, self.weight), y.transpose(-1, -2))
+        s = x @ self.weight @ y.transpose(-1, -2)
+        # remove dim 1 if n_out == 1
+        s = s.squeeze(1)
+        return s
 
-    # Copied from transformers.models.bert.modeling_bert.BertPreTrainedModel._init_weights
-    def _init_weights(self, module):
-        """ Initialize the weights """
-        if isinstance(module, nn.Linear):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
 
-
-class RobertaForArgumentLabel(RobertaPreTrainedModel):
+class BertForSDP(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
 
@@ -592,27 +604,49 @@ class RobertaForArgumentLabel(RobertaPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.dense = nn.Linear(2*config.hidden_size, config.hidden_size)
-        self.roberta = RobertaModel(config, add_pooling_layer=False)
+        self.bert = BertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-        self.activation = nn.SELU()
+
+        self.input_encoder = VarFastLSTM(enc_dim, hidden_size, num_layers=num_layers, batch_first=True, bidirectional=True, dropout=p_rnn)
+        self.activation = nn.LeakyReLU(0.1)
+        
+        self.criterion_arc = nn.BCELoss(reduction='none')
+        self.criterion_label = nn.CrossEntropyLoss(reduction='none')
 
         self.init_weights()
+
+    def init_biaffine(self):
+        hid_size = self.enc_out_dim
+        self.arc_h = nn.Linear(hid_size, self.arc_mlp_dim)
+        self.arc_c = nn.Linear(hid_size, self.arc_mlp_dim)
+        self.arc_attention = BiaffineAttention(self.arc_mlp_dim, bias_x=True, bias_y=False)
+
+        self.rel_h = nn.Linear(hid_size, self.rel_mlp_dim)
+        self.rel_c = nn.Linear(hid_size, self.rel_mlp_dim)
+        self.rel_attention = BiaffineAttention(self.rel_mlp_dim, n_out=self.num_labels, bias_x=True, bias_y=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.arc_h.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.arc_c.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.rel_h.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.rel_c.weight, a=0.1, nonlinearity='leaky_relu')
+
+        nn.init.constant_(self.arc_h.bias, 0.)
+        nn.init.constant_(self.arc_c.bias, 0.)
+        nn.init.constant_(self.rel_h.bias, 0.)
+        nn.init.constant_(self.rel_c.bias, 0.)
+
 
     def forward(
         self,
         input_ids=None,
         attention_mask=None,
         token_type_ids=None,
-        predicate_mask=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
+        first_ids=None,
+        max_len=None,
+        heads=None,
+        rels=None
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -621,104 +655,21 @@ class RobertaForArgumentLabel(RobertaPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.roberta(
+        outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
         )
 
         sequence_output = outputs[0]
+
+        sequence_output = self.dropout(sequence_output)
 
         # (batch, seq_len, hidden_size)
-        sequence_output = self.dropout(sequence_output)
-
-        # change 0/1 to bool matrix, must assure that each line has exactly one 1
-        predicate_hidden = sequence_output[(predicate_mask == 1)] 
-
-        predicate_hidden = predicate_hidden.unsqueeze(1).repeat(1, sequence_output.size(1), 1)
-        #print ("predicate_hidden:", predicate_hidden.size())
-        output = torch.cat([sequence_output, predicate_hidden], dim=-1)
-        output = self.activation(self.dense(output))
-        # (batch, seq_len, num_labels)
-        logits = self.classifier(output)
-
-        loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            # Only keep active parts of the loss
-            if attention_mask is not None:
-                active_loss = attention_mask.contiguous().view(-1) == 1
-                active_logits = logits.view(-1, self.num_labels)
-                active_labels = torch.where(
-                    active_loss, labels.contiguous().view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
-                )
-                #print ("active_labels:\n", active_labels)
-                #print ("active_logits:\n", torch.argmax(active_logits, -1))
-                loss = loss_fct(active_logits, active_labels)
-            else:
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-
-        output = (logits,) + outputs[2:]
-        return ((loss,) + output) if loss is not None else output
-
-
-class RobertaForPredicateSense(RobertaPreTrainedModel):
-
-    _keys_to_ignore_on_load_unexpected = [r"pooler"]
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.num_labels = config.num_labels
-
-        self.roberta = RobertaModel(config, add_pooling_layer=False)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-
-        self.init_weights()
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        token_type_ids=None,
-        predicate_mask=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        r"""
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-            Labels for computing the token classification loss. Indices should be in ``[0, ..., config.num_labels -
-            1]``.
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        outputs = self.roberta(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        sequence_output = outputs[0]
-
-        sequence_output = self.dropout(sequence_output)
-        logits = self.classifier(sequence_output)
+        output = sequence_output.gather(1, first_index.unsqueeze(-1).expand(size))
+        print ("first_ids:", first_ids)
+        print ("output:", output.size())
+        exit()
 
         loss = None
         if labels is not None:
