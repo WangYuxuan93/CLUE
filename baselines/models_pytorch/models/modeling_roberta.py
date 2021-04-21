@@ -13,6 +13,8 @@ from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import apply_chunking_to_forward
 from transformers import RobertaModel, RobertaConfig, PreTrainedModel
+from .modeling_bert import BiaffineAttention
+from neuronlp2.nn import VarFastLSTM
 
 import logging
 logger = logging.getLogger(__name__)
@@ -289,4 +291,156 @@ class RobertaForPredicateSense(RobertaPreTrainedModel):
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
         output = (logits,) + outputs[2:]
+        return ((loss,) + output) if loss is not None else output
+
+
+class RobertaForSDP(RobertaPreTrainedModel):
+
+    _keys_to_ignore_on_load_unexpected = [r"pooler"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = config.num_labels
+        self.arc_mlp_dim = 512
+        self.rel_mlp_dim = 128
+
+        self.roberta = RobertaModel(config, add_pooling_layer=False)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        self.input_encoder = VarFastLSTM(config.hidden_size, config.hidden_size, num_layers=3, batch_first=True, bidirectional=True, dropout=(0.33,0.33))
+        self.activation = nn.LeakyReLU(0.1)
+        self.mlp_dropout = nn.Dropout2d(p=0.33)
+
+        self.init_biaffine()
+        self.init_weights()
+
+    def init_biaffine(self):
+        self.arc_h = nn.Linear(self.config.hidden_size*2, self.arc_mlp_dim)
+        self.arc_c = nn.Linear(self.config.hidden_size*2, self.arc_mlp_dim)
+        self.arc_attention = BiaffineAttention(self.arc_mlp_dim, bias_x=True, bias_y=False)
+
+        self.rel_h = nn.Linear(self.config.hidden_size*2, self.rel_mlp_dim)
+        self.rel_c = nn.Linear(self.config.hidden_size*2, self.rel_mlp_dim)
+        self.rel_attention = BiaffineAttention(self.rel_mlp_dim, n_out=self.num_labels, bias_x=True, bias_y=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.arc_h.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.arc_c.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.rel_h.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.rel_c.weight, a=0.1, nonlinearity='leaky_relu')
+
+        nn.init.constant_(self.arc_h.bias, 0.)
+        nn.init.constant_(self.arc_c.bias, 0.)
+        nn.init.constant_(self.rel_h.bias, 0.)
+        nn.init.constant_(self.rel_c.bias, 0.)
+
+
+    def _arc_mlp(self, hidden):
+        # output size [batch, length, arc_mlp_dim]
+        arc_h = self.activation(self.arc_h(hidden))
+        arc_c = self.activation(self.arc_c(hidden))
+
+        # apply dropout on arc
+        # [batch, length, dim] --> [batch, 2 * length, dim]
+        arc = torch.cat([arc_h, arc_c], dim=1)
+        arc = self.mlp_dropout(arc.transpose(1, 2)).transpose(1, 2)
+        arc_h, arc_c = arc.chunk(2, 1)
+
+        return arc_h, arc_c
+
+    def _rel_mlp(self, hidden):
+        # output size [batch, length, rel_mlp_dim]
+        rel_h = self.activation(self.rel_h(hidden))
+        rel_c = self.activation(self.rel_c(hidden))
+
+        # apply dropout on rel
+        # [batch, length, dim] --> [batch, 2 * length, dim]
+        rel = torch.cat([rel_h, rel_c], dim=1)
+        rel = self.mlp_dropout(rel.transpose(1, 2)).transpose(1, 2)
+        rel_h, rel_c = rel.chunk(2, 1)
+        rel_h = rel_h.contiguous()
+        rel_c = rel_c.contiguous()
+
+        return rel_h, rel_c
+
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        first_ids=None,
+        word_mask=None,
+        heads=None,
+        rels=None
+    ):
+        batch_size, seq_len = first_ids.size()
+        # (batch, seq_len), seq mask, where at position 0 is 0
+        root_mask = torch.arange(seq_len, device=input_ids.device).gt(0).float().unsqueeze(0) * word_mask
+        # (batch, seq_len, seq_len)
+        mask_3D = (root_mask.unsqueeze(-1) * word_mask.unsqueeze(1))
+
+        return_dict = None
+
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+        )
+
+        sequence_output = outputs[0]
+
+        sequence_output = self.dropout(sequence_output)
+
+        size = list(first_ids.size()) + [sequence_output.size()[-1]]
+        # (batch, seq_len, hidden_size)
+        output = sequence_output.gather(1, first_ids.unsqueeze(-1).expand(size))
+        #print ("first_ids:", first_ids)
+        #print ("output:", output.size())
+        encoder_output, _ = self.input_encoder(output, word_mask)
+        output = self.mlp_dropout(encoder_output.transpose(1, 2)).transpose(1, 2)
+
+        # (batch, seq_len, arc_mlp_dim)
+        arc_h, arc_c = self._arc_mlp(encoder_output)
+        # (batch, seq_len, seq_len)
+        arc_logits = self.arc_attention(arc_c, arc_h)
+        # mask invalid position to -inf for log_softmax
+        if mask_3D is not None:
+            minus_mask = mask_3D.eq(0)
+            arc_logits = arc_logits.masked_fill(minus_mask, float('-inf'))
+        #print ("arc_logits:\n", arc_logits)
+        arc_logits = torch.sigmoid(arc_logits)
+
+        # (batch, length, rel_mlp_dim)
+        rel_h, rel_c = self._rel_mlp(encoder_output)
+        # (batch, n_rels, seq_len, seq_len)
+        rel_logits = self.rel_attention(rel_c, rel_h)
+
+        # (batch, seq_len, seq_len, n_rels)
+        transposed_rel_logits = rel_logits.permute(0, 2, 3, 1)
+        
+        #print ("transposed_rel_logits:\n", transposed_rel_logits)
+
+        loss = None
+        if heads is not None and rels is not None:
+            arc_loss_fct = nn.BCELoss(reduction='none')
+            arc_loss = arc_loss_fct(arc_logits, heads.float())
+            # mask invalid position to 0 for sum loss
+            if mask_3D is not None:
+                arc_loss = arc_loss * mask_3D
+            # [batch, length - 1] -> [batch] remove the symbolic root
+            arc_loss = arc_loss[:, 1:].sum(dim=1)
+
+            rel_locc_fct = nn.CrossEntropyLoss(reduction='none')
+            rel_loss = rel_locc_fct(rel_logits, rels)
+            if mask_3D is not None:
+                rel_loss = rel_loss * mask_3D
+            rel_loss = rel_loss * heads
+            rel_loss = rel_loss[:, 1:].sum(dim=1)
+
+            loss = 0.5 * (arc_loss + rel_loss).sum()
+
+        output = (arc_logits, transposed_rel_logits) + outputs[2:]
         return ((loss,) + output) if loss is not None else output
