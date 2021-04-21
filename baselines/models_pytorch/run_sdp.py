@@ -208,6 +208,9 @@ def train(args, train_dataset, model, tokenizer):
                         log_history.append(_result)
                     decisive_metric = 'lf'
                     if result is None or result[decisive_metric] > trainer_state['best_metric']:
+                        if global_step < args.no_save_steps: 
+                            logger.info("Do not save for the first %d steps", args.no_save_steps)
+                            continue
                         # Save model checkpoint
                         output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
                         if result is not None and result[decisive_metric] > trainer_state['best_metric']:
@@ -472,6 +475,8 @@ def main():
     parser.add_argument("--warmup_proportion", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for,E.g., 0.1 = 10% of training.")
 
+    parser.add_argument('--no_save_steps', type=int, default=0,
+                        help="Do not save model for the first X steps.")
     parser.add_argument('--logging_steps', type=int, default=10,
                         help="Log every X updates steps.")
     parser.add_argument('--save_steps', type=int, default=1000,
