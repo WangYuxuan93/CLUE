@@ -29,8 +29,8 @@ from tools.progressbar import ProgressBar
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
-from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
-from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForArgumentLabel, SemSynRobertaForPredicateSense
+from models.semsyn_bert import SemSynBertConfig
+from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForSDP
 from models.modeling_bert import BertConfig
 from models.modeling_roberta import RobertaForSDP
 from io_utils.sdp_writer import write_sdp_conllu
@@ -39,7 +39,7 @@ import re
 from pathlib import Path
 
 SBERT_CLASSES = {
-    'sdp': (SemSynRobertaConfig, SemSynRobertaForPredicateSense)
+    'sdp': (SemSynRobertaConfig, SemSynRobertaForSDP)
 }
 
 MODEL_CLASSES = {

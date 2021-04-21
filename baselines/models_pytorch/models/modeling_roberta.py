@@ -440,7 +440,7 @@ class RobertaForSDP(RobertaPreTrainedModel):
             rel_loss = rel_loss * heads
             rel_loss = rel_loss[:, 1:].sum(dim=1)
 
-            loss = 0.5 * (arc_loss + rel_loss).mean()
+            loss = 0.95 * arc_loss.mean() + 0.05 * rel_loss.mean()
 
         output = (arc_logits, transposed_rel_logits) + outputs[2:]
         return ((loss,) + output) if loss is not None else output
