@@ -37,18 +37,29 @@ import shutil
 import re
 from pathlib import Path
 
-SBERT_CLASSES = {
-    'conll09-zh-arg': (SemSynBertConfig, SemSynBertForArgumentLabel),
-    'conll09-en-arg': (SemSynRobertaConfig, SemSynRobertaForArgumentLabel),
-    'conll09-zh-sense': (SemSynBertConfig, SemSynBertForPredicateSense),
-    'conll09-en-sense': (SemSynRobertaConfig, SemSynRobertaForPredicateSense)
+
+SCONFIG_CLASSES = {
+    'bert': SemSynBertConfig,
+    'roberta': SemSynRobertaConfig,
+}
+
+SMODEL_CLASSES = {
+    'bert-arg': SemSynBertForArgumentLabel,
+    'roberta-arg': SemSynRobertaForArgumentLabel,
+    'bert-sense': SemSynBertForPredicateSense,
+    'roberta-sense': SemSynRobertaForPredicateSense,
+}
+
+CONFIG_CLASSES = {
+    'bert': BertConfig,
+    'roberta': RobertaConfig,
 }
 
 MODEL_CLASSES = {
-    'conll09-zh-arg': (BertConfig, BertForArgumentLabel, AutoTokenizer),
-    'conll09-en-arg': (RobertaConfig, RobertaForArgumentLabel, AutoTokenizer),
-    'conll09-zh-sense': (BertConfig, BertForPredicateSense, AutoTokenizer),
-    'conll09-en-sense': (RobertaConfig, RobertaForPredicateSense, AutoTokenizer),
+    'bert-arg': BertForArgumentLabel,
+    'roberta-arg': RobertaForArgumentLabel,
+    'bert-sense': BertForPredicateSense,
+    'roberta-sense': RobertaForPredicateSense,
 }
 
 
@@ -549,6 +560,7 @@ def main():
     seed_everything(args.seed)
     # Prepare CLUE task
     args.task_name = args.task_name.lower()
+    args.model_type = args.model_type.lower()
     args.task_type = args.task_name.split('-')[2]
     processor = processors[args.task_type](args.task_name)
     label_list = processor.get_labels()
@@ -559,11 +571,13 @@ def main():
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     if args.parser_model is not None or args.official_syntax_type:
-        config_class, model_class = SBERT_CLASSES[args.task_name]
+        config_class = SCONFIG_CLASSES[args.model_type]
+        model_class = SMODEL_CLASSES[args.model_type+'-'+args.task_type]
         tokenizer_class = AutoTokenizer
     else:
-        args.model_type = args.model_type.lower()
-        config_class, model_class, tokenizer_class = MODEL_CLASSES[args.task_name]
+        config_class = CONFIG_CLASSES[args.model_type]
+        model_class = MODEL_CLASSES[args.model_type+'-'+args.task_type]
+        tokenizer_class = AutoTokenizer
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
