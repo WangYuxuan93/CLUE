@@ -92,6 +92,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                 logger.info("Saving examples into cached file %s", cached_examples_file)
                 torch.save(examples, cached_examples_file)
         else:
+            logger.info("Loading examples from cached file %s", cached_examples_file)
             examples = torch.load(cached_examples_file)
     # Load data features from cache or dataset file
     if args.official_syntax_type: # gold or pred official syntax
