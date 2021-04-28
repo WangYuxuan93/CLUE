@@ -228,7 +228,7 @@ def convert_parsed_examples_to_features(
         heads, rels = parser.parse_bpes(
                         tokenized_inputs['input_ids'],
                         tokenized_inputs['attention_mask'],
-                        has_b=examples[0].text_b is not None,
+                        has_b=False,
                         expand_type=expand_type,
                         max_length=max_length, 
                         align_type=align_type, 

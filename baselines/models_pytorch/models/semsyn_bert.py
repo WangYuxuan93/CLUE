@@ -17,7 +17,7 @@ from transformers import PretrainedConfig, BertPreTrainedModel
 from models.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
-from models.gate import HighwayGateLayer, ConstantGateLayer
+from models.gate import HighwayGateLayer, ConstantGateLayer, InputGateLayer
 from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer
 from models.gnn_encoder import GNNEncoder

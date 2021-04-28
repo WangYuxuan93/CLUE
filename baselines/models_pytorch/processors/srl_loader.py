@@ -14,6 +14,8 @@ from processors.predicate_sense_processor import PredicateSenseProcessor
 from processors.predicate_sense_processor import convert_examples_to_features as sense_convert_examples_to_features
 from processors.predicate_sense_processor import convert_parsed_examples_to_features as sense_convert_parsed_examples_to_features
 
+from neuronlp2.parser import Parser
+from neuronlp2.sdp_parser import SDPParser
 
 logger = logging.getLogger(__name__)
 
