@@ -17,7 +17,7 @@ from transformers import PretrainedConfig, BertPreTrainedModel
 from models.modeling_bert import (BertEmbeddings, BertSelfOutput, BertAttention, BertIntermediate, BertOutput, BertLayer, BertPooler)
 from transformers.activations import ACT2FN
 
-from models.gate import HighwayGateLayer, ConstantGateLayer, InputGateLayer, ExtraConstantGateLayer
+from models.gate import HighwayGateLayer, ConstantGateLayer, InputGateLayer, ExtraConstantGateLayer, ExtraScalarGateLayer
 from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer
 from models.gnn_encoder import GNNEncoder
@@ -246,7 +246,7 @@ class ResidualBertOutput(nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         if self.use_fusion_gate:
-            hidden_states = self.gate(hidden_states + input_tensor, res_layer)
+            hidden_states = self.gate(res_layer, hidden_states + input_tensor)
         else:
             hidden_states = hidden_states + input_tensor + res_layer
         hidden_states = self.LayerNorm(hidden_states)
@@ -456,9 +456,9 @@ class SemSynBertEncoder(nn.Module):
                     rels=rels,
                 )
                 if self.use_fusion_gate:
-                    hidden_states = self.gates[i](hidden_states, inter_hidden_states)
+                    hidden_states = self.gates[i](inter_hidden_states, hidden_states)
                 else:
-                    hidden_states = 0.5*(hidden_states + inter_hidden_states)
+                    hidden_states = 0.5 * (inter_hidden_states + hidden_states)
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)

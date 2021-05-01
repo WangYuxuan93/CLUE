@@ -1,13 +1,15 @@
 import torch
 import torch.nn as nn
 
+# Note: x is syntax input, y is vanilla input
+
 class ConstantGateLayer(nn.Module):
     def __init__(self, fusion_gate_const=0.2):
         super(ConstantGateLayer, self).__init__()
         self.const = fusion_gate_const
 
     def forward(self, x, y):
-        return (1 - self.const) * x + self.const * y
+        return self.const * x + (1 - self.const) * y
 
 
 class ExtraConstantGateLayer(nn.Module):
@@ -16,7 +18,17 @@ class ExtraConstantGateLayer(nn.Module):
         self.const = fusion_gate_const
 
     def forward(self, x, y):
-        return x + self.const * y
+        return self.const * x + y
+
+
+class ExtraScalarGateLayer(nn.Module):
+    def __init__(self, in_out_size):
+        super(ExtraScalarGateLayer, self).__init__()
+        self.alpha = nn.Parameter(torch.tensor(0.))
+
+    def forward(self, x, y):
+        weight = torch.sigmoid(self.alpha)
+        return weight * x + y
 
 
 class HighwayGateLayer(nn.Module):
