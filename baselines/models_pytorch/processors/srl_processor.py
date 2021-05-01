@@ -146,6 +146,7 @@ def get_word2token_map(word_ids, lengths, debug=False):
             print ("wid2tid:\n", wid2tid)
     return wid2tid_list
 
+
 def align_flatten_heads(
         attention_mask,
         word_ids,
@@ -183,6 +184,93 @@ def align_flatten_heads(
                     child_id = child_id + 1
                     # head_id do not need since it is already 1 greater
                     head_id = head_id
+                    head_ids = wid2tid[head_id]
+                    # get the first token of the head word
+                    token_head_id = head_ids[0]
+                    child_ids = wid2tid[child_id]
+                    for child_id in child_ids:
+                        # ignore out of range arcs
+                        if child_id < max_length and token_head_id < max_length:
+                            heads[child_id][token_head_id] = 1
+                            rels[child_id][token_head_id] = syntax_label_map[label]
+            if debug:
+                torch.set_printoptions(profile="full")
+                print ("heads:\n", heads)
+                print ("rels:\n", rels)
+
+            if "word" in expand_type:
+                # add arc with word_label from following chars to the first char of each word
+                for tids in wid2tid:
+                    if len(tids) > 1:
+                        start_id = tids[0]
+                        for cid in tids[1:]:
+                            heads[cid][start_id] = 1
+                            rels[cid][start_id] = syntax_label_map["<WORD>"]
+                if debug:
+                    print ("heads (word arc):\n", heads)
+                    print ("rels (word arc):\n", rels)
+                    #exit()
+
+            heads_list.append(heads.to_sparse())
+            rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
+
+        heads = torch.stack(heads_list, dim=0)
+        rels = torch.stack(rels_list, dim=0)
+
+        if debug:
+            print ("heads:\n", heads)
+            print ("rels:\n", rels)
+            exit()
+
+        return heads, rels
+
+
+def align_flatten_heads_diff(
+        attention_mask,
+        word_ids,
+        flatten_gold_heads,
+        flatten_gold_rels,
+        flatten_pred_heads,
+        flatten_pred_rels,
+        max_length=128,
+        syntax_label_map=None,
+        expand_type="word",
+        debug=False
+    ):
+        #print ("attention_mask:\n", attention_mask)
+        lengths = [sum(mask) for mask in attention_mask]
+        #print ("lengths:\n", lengths)
+        #print ("word_ids:\n", word_ids)
+        wid2tid_list = get_word2token_map(word_ids, lengths)
+
+        heads_list = []
+        rels_list = []
+        for i in range(len(flatten_gold_heads)):
+            if debug:
+                print ("word_ids:\n", word_ids[i])
+                print ("wid2tid:\n", wid2tid_list[i])
+                print ("flatten_gold_heads:\n", flatten_gold_heads[i])
+                print ("flatten_pred_heads:\n", flatten_pred_heads[i])
+                print ("flatten_gold_rels:\n", flatten_gold_rels[i])
+                print ("flatten_pred_rels:\n", flatten_pred_rels[i])
+            
+            heads = torch.zeros(max_length, max_length, dtype=torch.long)
+            rels = torch.zeros(max_length, max_length, dtype=torch.long)
+            wid2tid = wid2tid_list[i]
+            if "copy" in expand_type:
+                head_ids = flatten_gold_heads[i]
+                pred_head_ids = flatten_pred_heads[i]
+                # copy the arc from first char of the head to all chars consisting its children
+                for child_id, head_id in enumerate(head_ids):
+                    # only add arcs for those prediction is wrong
+                    if head_id == pred_head_ids[child_id]: continue
+                    label = flatten_gold_rels[i][child_id]
+                    # add the first [CLS] token
+                    child_id = child_id + 1
+                    # head_id do not need +1 since it is already 1 greater
                     head_ids = wid2tid[head_id]
                     # get the first token of the head word
                     token_head_id = head_ids[0]

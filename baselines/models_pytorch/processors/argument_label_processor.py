@@ -8,7 +8,7 @@ from torch.utils.data import TensorDataset
 from .utils import DataProcessor
 from .common import conll09_chinese_label_mapping, conll09_english_label_mapping
 from processors.processor import cached_features_filename
-from processors.srl_processor import SrlProcessor, align_flatten_heads
+from processors.srl_processor import SrlProcessor, align_flatten_heads, align_flatten_heads_diff
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +297,18 @@ def convert_parsed_examples_to_features(
                         word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
                         flatten_heads=[example.pred_heads for example in examples],
                         flatten_rels=[example.pred_rels for example in examples],
+                        max_length=max_length,
+                        syntax_label_map=processor.get_syntax_label_map(),
+                        expand_type=expand_type,
+                    )
+    elif official_syntax_type == "diff":
+        heads, rels = align_flatten_heads_diff(
+                        attention_mask=tokenized_inputs['attention_mask'],
+                        word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+                        flatten_gold_heads=[example.gold_heads for example in examples],
+                        flatten_gold_rels=[example.gold_rels for example in examples],
+                        flatten_pred_heads=[example.pred_heads for example in examples],
+                        flatten_pred_rels=[example.pred_rels for example in examples],
                         max_length=max_length,
                         syntax_label_map=processor.get_syntax_label_map(),
                         expand_type=expand_type,
