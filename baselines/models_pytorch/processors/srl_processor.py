@@ -238,6 +238,7 @@ def align_flatten_heads_diff(
         max_length=128,
         syntax_label_map=None,
         expand_type="word",
+        align_type="diff",
         debug=False
     ):
         #print ("attention_mask:\n", attention_mask)
@@ -266,7 +267,9 @@ def align_flatten_heads_diff(
                 # copy the arc from first char of the head to all chars consisting its children
                 for child_id, head_id in enumerate(head_ids):
                     # only add arcs for those prediction is wrong
-                    if head_id == pred_head_ids[child_id]: continue
+                    if align_type == "diff" and head_id == pred_head_ids[child_id]: continue
+                    # only add arcs for those prediction is correct
+                    if align_type == "same" and head_id != pred_head_ids[child_id]: continue
                     label = flatten_gold_rels[i][child_id]
                     # add the first [CLS] token
                     child_id = child_id + 1

@@ -312,6 +312,20 @@ def convert_parsed_examples_to_features(
                         max_length=max_length,
                         syntax_label_map=processor.get_syntax_label_map(),
                         expand_type=expand_type,
+                        align_type="diff",
+                    )
+    elif official_syntax_type == "same":
+        heads, rels = align_flatten_heads_diff(
+                        attention_mask=tokenized_inputs['attention_mask'],
+                        word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+                        flatten_gold_heads=[example.gold_heads for example in examples],
+                        flatten_gold_rels=[example.gold_rels for example in examples],
+                        flatten_pred_heads=[example.pred_heads for example in examples],
+                        flatten_pred_rels=[example.pred_rels for example in examples],
+                        max_length=max_length,
+                        syntax_label_map=processor.get_syntax_label_map(),
+                        expand_type=expand_type,
+                        align_type="same",
                     )
     else:
         heads, rels = parser.parse_bpes(
