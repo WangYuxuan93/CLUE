@@ -316,3 +316,113 @@ def align_flatten_heads_diff(
             exit()
 
         return heads, rels
+
+
+def flatten_heads_to_matrix(
+        word_masks,
+        flatten_heads,
+        flatten_rels,
+        syntax_label_map=None,
+        debug=False
+    ):
+        lengths = [sum(mask) for mask in word_masks]
+        max_word_len = max(lengths)
+
+        heads_list = []
+        rels_list = []
+        for i in range(len(flatten_heads)):
+            if debug:
+                print ("flatten_heads:\n", flatten_heads[i])
+                print ("flatten_rels:\n", flatten_rels[i])
+            
+            heads = torch.zeros(max_word_len, max_word_len, dtype=torch.long)
+            rels = torch.zeros(max_word_len, max_word_len, dtype=torch.long)
+
+            head_ids = flatten_heads[i]
+            # copy the arc from first char of the head to all chars consisting its children
+            for child_id, head_id in enumerate(head_ids):
+                # omitt root arc
+                if head_id == 0: continue
+                head_id -= 1
+                label = flatten_rels[i][child_id]
+                heads[child_id][head_id] = 1
+                rels[child_id][head_id] = syntax_label_map[label]
+            
+            if debug:
+                torch.set_printoptions(profile="full")
+                print ("heads:\n", heads)
+                print ("rels:\n", rels)
+            heads_list.append(heads.to_sparse())
+            rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
+
+        heads = torch.stack(heads_list, dim=0)
+        rels = torch.stack(rels_list, dim=0)
+
+        if debug:
+            print ("heads:\n", heads)
+            print ("rels:\n", rels)
+            exit()
+
+        return heads, rels
+
+
+def get_word2token_map(word_ids, lengths, debug=False):
+    assert len(word_ids) == len(lengths)
+    wid2tid_list = []
+    for wids, l in zip(word_ids, lengths):
+        wid2tid = []
+        prev_word = None
+        for i, w in enumerate(wids):
+            if i >= l: break
+            if len(wid2tid) == 0 or w != prev_word:
+                wid2tid.append([i])
+                prev_word = w
+            else:
+                wid2tid[-1].append(i)
+        wid2tid_list.append(wid2tid)
+        if debug:
+            print ("wids:\n", wids)
+            print ("wid2tid:\n", wid2tid)
+    return wid2tid_list
+
+
+def prepare_word_level_input(
+        attention_mask,
+        word_ids,
+        tokens,
+        debug=False
+    ):
+        #print ("attention_mask:\n", attention_mask)
+        lengths = [sum(mask) for mask in attention_mask]
+        wid2tid_list = get_word2token_map(word_ids, lengths)
+        word_lens = [len(h) for h in tokens]
+        max_word_len = max(word_lens)
+        word_masks = []
+        for word_len in word_lens:
+            word_mask = [1 for _ in range(word_len)]
+            while len(word_mask) < max_word_len:
+                word_mask.append(0)
+            word_masks.append(word_mask)
+
+        first_ids_list = []
+        for i, wid2tid in enumerate(wid2tid_list):
+            # rm the first [CLS] token, only takes first_ids in word len
+            first_ids = [tids[0] for tids in wid2tid[1:word_lens[i]+1]]
+            assert len(first_ids) == word_lens[i]
+            while len(first_ids) < max_word_len:
+                first_ids.append(0)
+            first_ids_list.append(first_ids)
+
+        if debug:
+            print ("attention_mask:\n",attention_mask)
+            print ("word_ids:\n", word_ids)
+            print ("tokens:\n", tokens)
+            print ("word_lens:\n", word_lens)
+            print ("word_masks:\n", word_masks)
+            print ("first_ids_list:\n", first_ids_list)
+            exit()
+
+        return word_masks, first_ids_list, word_lens

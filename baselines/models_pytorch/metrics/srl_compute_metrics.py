@@ -49,7 +49,7 @@ def prf(preds, labels, pad_id=1):
         "f1": f1
     }
 
-def compute_metrics(task_name, preds, labels, debug=False):
+def compute_metrics(task_name, preds, labels, debug=True):
     task_type = task_name.split('-')[2]
     assert len(preds) == len(labels)
     # Remove ignored index (special tokens)

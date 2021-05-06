@@ -39,19 +39,34 @@ def collate_fn(batch):
     """
     num_items = len(batch[0])
     all_heads, all_rels, all_dists = None, None, None
+    all_first_ids, all_word_mask = None, None
     if num_items == 5:
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels = map(torch.stack, zip(*batch))
     elif num_items == 7:
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
-    elif num_items == 8:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels, all_dists = map(torch.stack, zip(*batch))
+        # if len == 7, the last two has 2 possible choice
+        # if the tensor is not sparse and is 2D, then it is first_ids
+        if not all_heads.is_sparse and len(all_heads.size()) == 2:
+            all_first_ids = all_heads
+            all_word_mask = all_rels
+            all_heads, all_rels = None, None
+    elif num_items == 9:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask, all_heads, all_rels = map(torch.stack, zip(*batch))
     max_len = max(all_attention_mask.sum(-1)).item()
     all_input_ids = all_input_ids[:, :max_len]
     all_attention_mask = all_attention_mask[:, :max_len]
     all_token_type_ids = all_token_type_ids[:, :max_len]
-    all_predicate_mask = all_predicate_mask[:, :max_len]
-    all_labels = all_labels[:, :max_len]
-    if num_items >= 7:
+
+    if all_word_mask is not None:
+        max_word_len = max(all_word_mask.sum(-1)).item()
+        all_first_ids = all_first_ids[:, :max_word_len]
+        all_word_mask = all_word_mask[:, :max_word_len]
+        all_predicate_mask = all_predicate_mask[:, :max_word_len]
+        all_labels = all_labels[:, :max_word_len]
+    else:
+        all_predicate_mask = all_predicate_mask[:, :max_len]
+        all_labels = all_labels[:, :max_len]
+    if all_heads is not None:
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
             all_rels = all_rels.to_dense()
@@ -60,7 +75,7 @@ def collate_fn(batch):
         elif len(all_heads.size()) == 4:
             all_heads = all_heads[:, :, :max_len, :max_len]
         all_rels = all_rels[:, :max_len, :max_len]
-    if num_items == 8:
+    if all_dists is not None:
         if all_dists.is_sparse:
             all_dists = all_dists.to_dense()
         all_dists = all_dists[:, :max_len, :max_len]
@@ -73,6 +88,8 @@ def collate_fn(batch):
     batch["labels"] = all_labels
     batch["heads"] = all_heads
     batch["rels"] = all_rels
+    batch["first_ids"] = all_first_ids
+    batch["word_mask"] = all_word_mask
     batch["dists"] = all_dists
     return batch
 
@@ -86,7 +103,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     #elif task_type == 'sense':
 
     output_mode = 'srl'
-    cached_examples_file = os.path.join(args.data_dir, 'cached_examples_{}_{}'.format(data_type, str(task)))
+    cached_examples_file = os.path.join(args.data_dir, 'cached_examples_{}_{}'.format(data_type, str(task) if not args.is_word_level else str(task)+"-word-level"))
     if return_examples:
         if not os.path.exists(cached_examples_file):
             examples = processor.get_examples(args.data_dir, data_type)
@@ -99,6 +116,8 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     # Load data features from cache or dataset file
     if args.official_syntax_type: # gold or pred official syntax
         parser_info = args.official_syntax_type+"-syntax"
+        if args.is_word_level:
+            parser_info += "-word-level"
         #parser_info = "gold-syntax"
         if args.parser_return_tensor:
             parser_info += "-3d"
@@ -116,7 +135,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
             args.parser_align_type))
         logger.info("Cached features filename: {}".format(cached_features_file))
     else:
-        cached_features_file = cached_features_filename(args, task, data_type=data_type)
+        cached_features_file = cached_features_filename(args, task if not args.is_word_level else task+"-word-level", data_type=data_type)
 
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
@@ -150,6 +169,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                                             tokenizer,
                                             task=args.task_name,
                                             label_list=label_list,
+                                            is_word_level=args.is_word_level,
                                             max_length=args.max_seq_length,
                                             output_mode=output_mode,
                                             pad_on_left=bool(args.model_type in ['xlnet']),
@@ -163,6 +183,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                                                     biaffine_parser,
                                                     task=args.task_name,
                                                     label_list=label_list,
+                                                    is_word_level=args.is_word_level,
                                                     max_length=args.max_seq_length,
                                                     output_mode=output_mode,
                                                     pad_on_left=bool(args.model_type in ['xlnet']),
@@ -193,19 +214,26 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
     all_predicate_mask = torch.tensor([f.predicate_mask for f in features], dtype=torch.long)
     all_labels = torch.tensor([f.label_ids for f in features], dtype=torch.long)
+    # for word level model
+    if args.is_word_level:
+        all_first_ids = torch.tensor([f.first_ids for f in features], dtype=torch.long)
+        all_word_mask = torch.tensor([f.word_mask for f in features], dtype=torch.long)
 
     if args.parser_model is None and not args.official_syntax_type:
-        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels)
+        if args.is_word_level:
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
+                                all_first_ids, all_word_mask)
+        else:
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels)
     else:
         all_heads = torch.stack([f.heads for f in features])
         all_rels = torch.stack([f.rels for f in features])
-        if args.parser_compute_dist:
-            all_dists = torch.stack([f.dists for f in features])
+        if args.is_word_level:
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
-                                    all_heads, all_rels, all_dists)
+                                all_first_ids, all_word_mask, all_heads, all_rels)
         else:
             dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
-                                    all_heads, all_rels)
+                                all_heads, all_rels)
 
     if return_examples:
         return dataset, examples
