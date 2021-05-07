@@ -33,6 +33,7 @@ from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForArgumentL
 from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
 from models.modeling_bert import BertForWordLevelArgumentLabel, BertForWordLevelPredicateSense
 from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
+from models.modeling_roberta import RobertaForWordLevelArgumentLabel, RobertaForWordLevelPredicateSense
 from io_utils.srl_writer import write_conll09_predicate_sense, write_conll09_argument_label
 import shutil
 import re
@@ -65,7 +66,9 @@ MODEL_CLASSES = {
 
 WORD_LEVEL_MODEL_CLASSES = {
     'bert-arg': BertForWordLevelArgumentLabel,
+    'roberta-arg': RobertaForWordLevelArgumentLabel,
     'bert-sense': BertForWordLevelPredicateSense,
+    'roberta-sense': RobertaForWordLevelPredicateSense,
 }
 
 
