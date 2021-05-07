@@ -31,7 +31,7 @@ from neuronlp2.sdp_parser import SDPParser
 from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
 from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForArgumentLabel, SemSynRobertaForPredicateSense
 from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
-from models.modeling_bert import BertForWordLevelArgumentLabel
+from models.modeling_bert import BertForWordLevelArgumentLabel, BertForWordLevelPredicateSense
 from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
 from io_utils.srl_writer import write_conll09_predicate_sense, write_conll09_argument_label
 import shutil
@@ -65,9 +65,7 @@ MODEL_CLASSES = {
 
 WORD_LEVEL_MODEL_CLASSES = {
     'bert-arg': BertForWordLevelArgumentLabel,
-    'roberta-arg': RobertaForArgumentLabel,
-    'bert-sense': BertForPredicateSense,
-    'roberta-sense': RobertaForPredicateSense,
+    'bert-sense': BertForWordLevelPredicateSense,
 }
 
 

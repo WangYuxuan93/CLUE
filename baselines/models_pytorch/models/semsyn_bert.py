@@ -497,7 +497,12 @@ class SemSynBertModel(BertPreTrainedModel):
         self.config = config
 
         self.embeddings = BertEmbeddings(config)
-        self.encoder = SemSynBertEncoder(config)
+        self.is_word_level = "is_word_level" in config.graph and config.graph["is_word_level"]
+
+        if self.is_word_level:
+            self.encoder = WordLevelSemSynBertEncoder(config)
+        else:
+            self.encoder = SemSynBertEncoder(config)
 
         self.pooler = BertPooler(config) if add_pooling_layer else None
 
@@ -522,6 +527,8 @@ class SemSynBertModel(BertPreTrainedModel):
         input_ids=None,
         attention_mask=None,
         token_type_ids=None,
+        first_ids=None,
+        word_mask=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
@@ -595,18 +602,34 @@ class SemSynBertModel(BertPreTrainedModel):
         embedding_output = self.embeddings(
             input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds
         )
-        encoder_outputs = self.encoder(
-            embedding_output,
-            attention_mask=extended_attention_mask,
-            head_mask=head_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_extended_attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-            heads=heads,
-            rels=rels,
-        )
+        if self.is_word_level:
+            encoder_outputs = self.encoder(
+                embedding_output,
+                attention_mask=extended_attention_mask,
+                first_ids=first_ids,
+                word_mask=word_mask,
+                head_mask=head_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_extended_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                heads=heads,
+                rels=rels,
+            )
+        else:
+            encoder_outputs = self.encoder(
+                embedding_output,
+                attention_mask=extended_attention_mask,
+                head_mask=head_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_extended_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                heads=heads,
+                rels=rels,
+            )
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
         #if not return_dict:
@@ -857,7 +880,6 @@ class SemSynBertForQuestionAnswering(BertPreTrainedModel):
             return ((total_loss,) + output) if total_loss is not None else output
 
 
-
 class SemSynBertForArgumentLabel(BertPreTrainedModel):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
@@ -865,6 +887,7 @@ class SemSynBertForArgumentLabel(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
+        self.is_word_level = "is_word_level" in config.graph and config.graph["is_word_level"]
 
         self.bert = SemSynBertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -880,6 +903,8 @@ class SemSynBertForArgumentLabel(BertPreTrainedModel):
         attention_mask=None,
         token_type_ids=None,
         predicate_mask=None,
+        first_ids=None,
+        word_mask=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
@@ -897,19 +922,36 @@ class SemSynBertForArgumentLabel(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-            heads=heads,
-            rels=rels,
-        )
+        if self.is_word_level:
+            outputs = self.bert(
+                input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                first_ids=first_ids,
+                word_mask=word_mask,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                heads=heads,
+                rels=rels,
+            )
+        else:
+            outputs = self.bert(
+                input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                heads=heads,
+                rels=rels,
+            )
 
         sequence_output = outputs[0]
         # (batch, seq_len, hidden_size)
@@ -924,13 +966,14 @@ class SemSynBertForArgumentLabel(BertPreTrainedModel):
         output = self.activation(self.dense(output))
         # (batch, seq_len, num_labels)
         logits = self.classifier(output)
-
+        #print ("labels:\n", labels)
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
+            mask = word_mask if self.is_word_level else attention_mask
             # Only keep active parts of the loss
-            if attention_mask is not None:
-                active_loss = attention_mask.contiguous().view(-1) == 1
+            if mask is not None:
+                active_loss = mask.contiguous().view(-1) == 1
                 active_logits = logits.view(-1, self.num_labels)
                 active_labels = torch.where(
                     active_loss, labels.contiguous().view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
@@ -952,6 +995,7 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
+        self.is_word_level = "is_word_level" in config.graph and config.graph["is_word_level"]
 
         self.bert = SemSynBertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -965,6 +1009,8 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
         attention_mask=None,
         token_type_ids=None,
         predicate_mask=None,
+        first_ids=None,
+        word_mask=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
@@ -982,19 +1028,36 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-            heads=heads,
-            rels=rels,
-        )
+        if self.is_word_level:
+            outputs = self.bert(
+                input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                first_ids=first_ids,
+                word_mask=word_mask,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                heads=heads,
+                rels=rels,
+            )
+        else:
+            outputs = self.bert(
+                input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                heads=heads,
+                rels=rels,
+            )
 
         sequence_output = outputs[0]
         
@@ -1004,9 +1067,10 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
+            mask = word_mask if self.is_word_level else attention_mask
             # Only keep active parts of the loss
-            if attention_mask is not None:
-                active_loss = attention_mask.contiguous().view(-1) == 1
+            if mask is not None:
+                active_loss = mask.contiguous().view(-1) == 1
                 active_logits = logits.view(-1, self.num_labels)
                 active_labels = torch.where(
                     active_loss, labels.contiguous().view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
@@ -1017,3 +1081,139 @@ class SemSynBertForPredicateSense(BertPreTrainedModel):
 
         output = (logits,) + outputs[2:]
         return ((loss,) + output) if loss is not None else output
+
+
+class WordLevelSemSynBertEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.graph_encoder = config.graph["encoder"]
+        self.fusion_type = "top" # word-level only support top fusion_type
+        self.use_rel_embedding = self.graph_encoder != "RGCN" and config.graph["use_rel_embedding"]
+        self.data_flow = config.graph["data_flow"]
+
+        self.layer = nn.ModuleList([BertLayer(config) for i in range(config.num_hidden_layers)])
+        self.gnn_encoder = GNNEncoder(config)
+
+        if self.use_rel_embedding:
+            if self.graph_encoder == "GAT":
+                # should have same size as one attention head
+                in_out_size = config.graph["lowrank_size"] if config.graph["do_pal_project"] else config.hidden_size
+                config.graph["rel_embed_size"] = int(in_out_size / config.graph["num_attention_heads"])
+            self.num_rel_labels = config.graph["num_rel_labels"]
+            self.num_all_rel_labels = self.num_rel_labels * 2 if self.data_flow == "bidir" else self.num_rel_labels
+            self.rel_embeddings = nn.Embedding(self.num_all_rel_labels, config.graph["rel_embed_size"], padding_idx=0)
+            self.rel_dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        self.show_info()
+
+    def show_info(self):
+        self.use_output_layer = "use_output_layer" in self.config.graph and self.config.graph["use_output_layer"]
+        self.use_ff_layer = "use_ff_layer" in self.config.graph and self.config.graph["use_ff_layer"]
+        logger.info("###### SemSynWordLevelBERT Encoder ######")
+        logger.info("graph_encoder = {}, fusion_type = {}".format('GraphMask' if self.fusion_type =="mask" else self.graph_encoder, self.fusion_type))
+        if self.fusion_type in ["residual", "top"]:
+            logger.info("use_output_layer = {}, use_ff_layer = {}".format(self.use_output_layer, self.use_ff_layer))
+        logger.info("data_flow = {}, top num_layers = {}".format(self.data_flow, 
+                                                    self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A"))
+        logger.info("lowrank_size = {} (hidden = {}), num_attention_heads = {}".format(self.config.graph["lowrank_size"] if self.config.graph["do_pal_project"] else "N/A",
+                                                self.config.hidden_size, self.config.graph["num_attention_heads"] if self.graph_encoder in ["GAT","ATT"] else "N/A"))
+        logger.info("data_flow_gate = {}".format(self.config.graph["data_flow_gate"] if self.config.graph["use_data_flow_gate"] 
+                                                    and self.graph_encoder=="GCN" else "N/A"))
+        logger.info("rel_embed_size = {}, num_basic_matrix = {}".format(self.config.graph["rel_embed_size"] if self.use_rel_embedding and self.graph_encoder!="RGCN" else "N/A",
+                                                self.config.graph["num_basic_matrix"] if self.graph_encoder=="RGCN" else "N/A"))
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        first_ids=None,
+        word_mask=None,
+        head_mask=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        output_attentions=True,
+        output_hidden_states=False,
+        return_dict=False,
+        heads=None,
+        rels=None,
+    ):
+        all_hidden_states = () if output_hidden_states else None
+        all_attentions = () if output_attentions else None
+
+        # preprocess
+        # convert rels to embedding
+        if self.use_rel_embedding:
+            if self.data_flow == "c2h":
+                # do not need to add offset since no h2c label
+                rels = rels.permute(0,2,1)
+            if self.data_flow == "bidir":
+                zeros = torch.zeros_like(rels, dtype=torch.long, device=rels.device)
+                reverse_rels = rels.permute(0,2,1) + self.num_rel_labels
+                reverse_rels = torch.where(reverse_rels>self.num_rel_labels, reverse_rels, zeros)
+                rels = self.rel_embeddings(rels) + self.rel_embeddings(reverse_rels)
+            else:
+                rels = self.rel_embeddings(rels)
+            rels = self.rel_dropout(rels)
+
+        # convert heads to mask like format
+        if self.graph_encoder == "GAT":
+            if self.data_flow == "c2h":
+                heads = heads.permute(0, 2, 1)
+            elif self.data_flow == "bidir":
+                heads = heads + heads.permute(0, 2, 1)
+                # deal with entries == 2
+                heads = torch.where(heads>0, torch.ones_like(heads), torch.zeros_like(heads))
+            # (batch, 1, seq_len, seq_len), valid arc = 0, invalid arc = -10000.0
+            heads = heads.unsqueeze(1)
+            heads = (1.0 - heads) * -10000.0
+
+        for i, layer_module in enumerate(self.layer):
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (hidden_states,)
+
+            layer_head_mask = head_mask[i] if head_mask is not None else None
+
+            if getattr(self.config, "gradient_checkpointing", False):
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs, output_attentions)
+
+                    return custom_forward
+
+                layer_outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer_module),
+                    hidden_states,
+                    attention_mask,
+                    layer_head_mask,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                )
+            else:
+                layer_outputs = layer_module(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    head_mask=layer_head_mask,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
+                    output_attentions=output_attentions,
+                )
+            hidden_states = layer_outputs[0]
+
+            if output_attentions:
+                all_attentions = all_attentions + (layer_outputs[1],)
+
+        if output_hidden_states:
+            all_hidden_states = all_hidden_states + (hidden_states,)
+
+        size = list(first_ids.size()) + [hidden_states.size()[-1]]
+        # (batch, seq_len, hidden_size)
+        hidden_states = hidden_states.gather(1, first_ids.unsqueeze(-1).expand(size))
+        hidden_states = self.gnn_encoder(
+                                hidden_states, 
+                                attention_mask=word_mask, 
+                                heads=heads, 
+                                rels=rels)
+
+        return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)

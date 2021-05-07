@@ -63,22 +63,25 @@ def collate_fn(batch):
         all_word_mask = all_word_mask[:, :max_word_len]
         all_predicate_mask = all_predicate_mask[:, :max_word_len]
         all_labels = all_labels[:, :max_word_len]
+        head_max_len = max_word_len
     else:
         all_predicate_mask = all_predicate_mask[:, :max_len]
         all_labels = all_labels[:, :max_len]
+        head_max_len = max_len
+
     if all_heads is not None:
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
             all_rels = all_rels.to_dense()
         if len(all_heads.size()) == 3:
-            all_heads = all_heads[:, :max_len, :max_len]
+            all_heads = all_heads[:, :head_max_len, :head_max_len]
         elif len(all_heads.size()) == 4:
-            all_heads = all_heads[:, :, :max_len, :max_len]
-        all_rels = all_rels[:, :max_len, :max_len]
+            all_heads = all_heads[:, :, :head_max_len, :head_max_len]
+        all_rels = all_rels[:, :head_max_len, :head_max_len]
     if all_dists is not None:
         if all_dists.is_sparse:
             all_dists = all_dists.to_dense()
-        all_dists = all_dists[:, :max_len, :max_len]
+        all_dists = all_dists[:, :head_max_len, :head_max_len]
     
     batch = {}
     batch["input_ids"] = all_input_ids
