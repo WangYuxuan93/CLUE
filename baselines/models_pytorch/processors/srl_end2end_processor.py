@@ -40,6 +40,11 @@ def collate_fn(batch):
     all_first_ids = all_first_ids[:, :max_word_len]
     all_word_mask = all_word_mask[:, :max_word_len]
     all_predicate_mask = all_predicate_mask[:, :max_word_len]
+
+    if all_srl_heads.is_sparse:
+        all_srl_heads = all_srl_heads.to_dense()
+    if all_srl_rels.is_sparse:
+        all_srl_rels = all_srl_rels.to_dense()
     all_srl_heads = all_srl_heads[:, :max_word_len, :max_word_len]
     all_srl_rels = all_srl_rels[:, :max_word_len, :max_word_len]
 
@@ -285,6 +290,9 @@ def convert_examples_to_features(
                 srl_rels[pred_id][arg_id] = label_map[arg_label]
         srl_heads = srl_heads.transpose(1,0)
         srl_rels = srl_rels.transpose(1,0)
+
+        srl_heads = torch.from_numpy(srl_heads).long().to_sparse()
+        srl_rels = torch.from_numpy(srl_rels).long().to_sparse()
 
         predicate_mask = np.zeros(max_word_len, dtype=np.int32)
         for word_pred_id in example.pred_ids:
@@ -654,8 +662,8 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
     all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
     all_predicate_mask = torch.tensor([f.predicate_mask for f in features], dtype=torch.long)
-    all_srl_heads = torch.tensor([f.srl_heads for f in features], dtype=torch.long)
-    all_srl_rels = torch.tensor([f.srl_rels for f in features], dtype=torch.long)
+    all_srl_heads = torch.stack([f.srl_heads for f in features])
+    all_srl_rels = torch.stack([f.srl_rels for f in features])
 
     all_first_ids = torch.tensor([f.first_ids for f in features], dtype=torch.long)
     all_word_mask = torch.tensor([f.word_mask for f in features], dtype=torch.long)

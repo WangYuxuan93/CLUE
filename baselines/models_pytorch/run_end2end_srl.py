@@ -37,6 +37,7 @@ from models.modeling_bert import BertForWordLevelArgumentLabel, BertForWordLevel
 from models.modeling_bert import BertForEnd2EndSrl
 from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
 from models.modeling_roberta import RobertaForWordLevelArgumentLabel, RobertaForWordLevelPredicateSense
+from models.modeling_roberta import RobertaForEnd2EndSrl
 from io_utils.srl_writer import write_conll09_end2end
 import shutil
 import re
@@ -65,7 +66,8 @@ MODEL_CLASSES = {
     'roberta-arg': RobertaForArgumentLabel,
     'bert-sense': BertForPredicateSense,
     'roberta-sense': RobertaForPredicateSense,
-    'bert-srl': BertForEnd2EndSrl
+    'bert-srl': BertForEnd2EndSrl,
+    'roberta-srl': RobertaForEnd2EndSrl,
 }
 
 WORD_LEVEL_MODEL_CLASSES = {
@@ -74,6 +76,7 @@ WORD_LEVEL_MODEL_CLASSES = {
     'bert-sense': BertForWordLevelPredicateSense,
     'roberta-sense': RobertaForWordLevelPredicateSense,
     'bert-srl': BertForEnd2EndSrl,
+    'roberta-srl': RobertaForEnd2EndSrl,
 }
 
 
