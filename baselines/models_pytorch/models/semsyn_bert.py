@@ -1217,3 +1217,108 @@ class WordLevelSemSynBertEncoder(nn.Module):
                                 rels=rels)
 
         return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)
+
+
+class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
+
+    _keys_to_ignore_on_load_unexpected = [r"pooler"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = config.num_labels
+        self.mlp_size = 256
+
+        self.bert = SemSynBertModel(config, add_pooling_layer=False)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+        self.input_encoder = VarFastLSTM(config.hidden_size, config.hidden_size, 
+                                         num_layers=3, batch_first=True, 
+                                         bidirectional=True, dropout=(0.2,0.2))
+        self.activation = nn.LeakyReLU(0.1)
+        self.mlp_dropout = nn.Dropout2d(p=0.2)
+
+        self.init_biaffine()
+        self.init_weights()
+
+    def init_biaffine(self):
+        self.dense_p = nn.Linear(self.config.hidden_size*2, self.mlp_size)
+        self.dense_a = nn.Linear(self.config.hidden_size*2, self.mlp_size)
+        self.rel_attention = BiaffineAttention(self.mlp_size, n_out=self.num_labels, bias_x=True, bias_y=True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.dense_p.weight, a=0.1, nonlinearity='leaky_relu')
+        nn.init.kaiming_uniform_(self.dense_a.weight, a=0.1, nonlinearity='leaky_relu')
+
+        nn.init.constant_(self.dense_p.bias, 0.)
+        nn.init.constant_(self.dense_a.bias, 0.)
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        first_ids=None,
+        word_mask=None,
+        heads=None,
+        rels=None,
+        src_heads=None,
+        src_rels=None,
+    ):
+        batch_size, seq_len = first_ids.size()
+        # (batch, seq_len), seq mask, where at position 0 is 0
+        root_mask = torch.arange(seq_len, device=input_ids.device).gt(0).float().unsqueeze(0) * word_mask
+        # (batch, seq_len, seq_len)
+        mask_3D = (root_mask.unsqueeze(-1) * word_mask.unsqueeze(1))
+
+        return_dict = None
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            heads=src_heads,
+            rels=src_rels,
+        )
+
+        sequence_output = outputs[0]
+
+        sequence_output = self.dropout(sequence_output)
+
+        size = list(first_ids.size()) + [sequence_output.size()[-1]]
+        # (batch, seq_len, hidden_size)
+        output = sequence_output.gather(1, first_ids.unsqueeze(-1).expand(size))
+        #print ("first_ids:", first_ids)
+        #print ("output:", output.size())
+        encoder_output, _ = self.input_encoder(output, word_mask)
+
+        # (batch, seq_len, mlp_size)
+        pred_hidden = self.activation(self.dense_p(encoder_output))
+        pred_hidden = self.mlp_dropout(pred_hidden.transpose(1, 2)).transpose(1, 2)
+        arg_hidden = self.activation(self.dense_a(encoder_output))
+        arg_hidden = self.mlp_dropout(arg_hidden.transpose(1, 2)).transpose(1, 2)
+
+        # (batch, n_rels, seq_len, seq_len)
+        rel_logits = self.rel_attention(arg_hidden, pred_hidden)
+
+        # (batch, seq_len, seq_len, n_rels)
+        transposed_rel_logits = rel_logits.permute(0, 2, 3, 1)
+        
+        #print ("transposed_rel_logits:\n", transposed_rel_logits)
+
+        loss = None
+        if rels is not None:
+            rel_loss_fct = nn.CrossEntropyLoss(reduction='none')
+            rel_loss = rel_loss_fct(rel_logits, rels)
+            if mask_3D is not None:
+                rel_loss = rel_loss * mask_3D
+            # do not need heads, use -100 to denote invalid columns
+            #rel_loss = rel_loss * heads
+            # [batch, length - 1] -> [batch] remove the symbolic root
+            rel_loss = rel_loss[:, 1:].sum(dim=1)
+
+            loss = rel_loss.mean()
+
+        output = (transposed_rel_logits) + outputs[2:]
+        return ((loss,) + output) if loss is not None else output

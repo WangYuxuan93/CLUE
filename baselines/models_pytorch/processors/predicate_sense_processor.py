@@ -33,7 +33,7 @@ class InputPredicateSenseFeatures(object):
         self.label_ids = label_ids
         self.word_mask = word_mask
         self.first_ids = first_ids
-        
+
 
 class InputParsedPredicateSenseFeatures(object):
     """A single set of features of data."""

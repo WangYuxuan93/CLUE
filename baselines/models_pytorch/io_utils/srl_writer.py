@@ -118,3 +118,48 @@ def write_conll09_argument_label(predict_labels, examples, output_file):
 				else:
 					output.append('\t'.join(items))
 			writer.write('\n'.join(output)+'\n\n')
+
+
+def write_conll09_end2end(preds, golds, label_map, examples, output_file, debug=False):
+	with open(output_file, "w") as writer:
+		for i, pred in enumerate(preds):
+			if debug:
+				print ("pred:\n", pred)
+				print ("gold:\n", golds[i])
+			example = examples[i]
+
+			pred_ids = [x-1 for x in example.pred_ids]
+			words = example.words[1:]
+			tags = example.pos_tags[1:]
+			heads = [h-1 for h in example.gold_heads[1:]]
+			rels = example.gold_rels[1:]
+			output = []
+
+			num_prds = len(pred_ids)
+			# omit the first <ROOT> token
+			for j, word in enumerate(words):
+				items = ['_'] * 14
+				items[0] = str(j+1)
+				items[1] = word
+				items[2] = word
+				items[3] = word
+				items[4] = tags[j]
+				items[5] = tags[j]
+				items[8] = str(heads[j])
+				items[9] = str(heads[j])
+				items[10] = rels[j]
+				items[11] = rels[j]
+				if j in pred_ids:
+					items[-2] = 'Y'
+					prd_label = label_map[pred[j+1,0]]
+					assert prd_label.startswith('prd')
+					items[-1] = prd_label.split(':')[1]
+				rel_items = ['_' for _ in range(num_prds)]
+				for k, prd_id in enumerate(pred_ids):
+					arg_label = label_map[pred[j+1,prd_id+1]]
+					if arg_label != 'O':
+						assert arg_label.startswith('arg')
+						rel_items[k] = arg_label.split(':')[1]
+
+				output.append('\t'.join(items+rel_items))
+			writer.write('\n'.join(output)+'\n\n')
