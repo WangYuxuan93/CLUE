@@ -263,7 +263,6 @@ def convert_examples_to_features(
         tokens=[example.words for example in examples])
     max_word_len = max(word_lens)
     for (ex_index, example) in enumerate(examples):
-        example.show()
         if ex_index % 10000 == 0:
             logger.info("Writing example %d" % (ex_index))
         word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
