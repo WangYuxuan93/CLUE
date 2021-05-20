@@ -32,7 +32,8 @@ def collate_fn(batch):
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_srl_heads, all_srl_rels, \
         all_first_ids, all_word_mask, all_heads, all_rels = map(torch.stack, zip(*batch))
     max_len = max(all_attention_mask.sum(-1)).item()
-    all_input_ids = all_input_ids[:, :max_len]
+    # save all_input_ids to decise between word/subword-level 
+    all_input_ids_ = all_input_ids[:, :max_len]
     all_attention_mask = all_attention_mask[:, :max_len]
     all_token_type_ids = all_token_type_ids[:, :max_len]
 
@@ -53,12 +54,15 @@ def collate_fn(batch):
     all_srl_rels = torch.where(all_srl_rels==0, neg_mask, all_srl_rels)
     #print ("all_srl_rels:\n", all_srl_rels)
     if all_heads is not None:
+        #print ("all_heads:", all_heads.size())
+        #print ("all_input_ids:", all_input_ids.size())
         if list(all_heads.size())[-1] == list(all_input_ids.size())[-1]:
             # subword-level syntax matrix
             head_max_len = max_len
         else:
             # word-level syntax matrix
             head_max_len = max_word_len
+        #print ("head_max_len=",head_max_len)
         
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
@@ -74,7 +78,7 @@ def collate_fn(batch):
         all_dists = all_dists[:, :head_max_len, :head_max_len]
     
     batch = {}
-    batch["input_ids"] = all_input_ids
+    batch["input_ids"] = all_input_ids_
     batch["attention_mask"] = all_attention_mask
     batch["token_type_ids"] = all_token_type_ids
     batch["predicate_mask"] = all_predicate_mask
@@ -123,8 +127,8 @@ class InputParsedSrlEnd2EndFeatures(object):
             predicate_mask,
             srl_heads, 
             srl_rels,
-            source_heads,
-            source_rels,
+            heads,
+            rels,
             word_mask=None,
             first_ids=None
         ):
@@ -132,7 +136,6 @@ class InputParsedSrlEnd2EndFeatures(object):
         self.attention_mask = attention_mask
         self.token_type_ids = token_type_ids
         self.predicate_mask = predicate_mask
-        self.label_ids = label_ids
         self.srl_heads = srl_heads
         self.srl_rels = srl_rels
         self.heads = heads
@@ -205,9 +208,9 @@ class SrlEnd2EndProcessor(SrlProcessor):
             arg_labels = [[self.root_token] + x for x in arg_labels]
 
             heads = [0] + [x+1 for x in heads]
-            rels = [self.root_token] + rels
+            rels = ['<PAD>'] + rels
             pred_heads = [0] + [x+1 for x in pred_heads]
-            pred_rels = [self.root_token] + pred_rels
+            pred_rels = ['<PAD>'] + pred_rels
 
             examples.append(
                 InputConll09Example(guid=guid, sid=sid, words=words, pred_ids=pred_ids, 
@@ -258,7 +261,7 @@ def convert_examples_to_features(
     label_map = {label: i for i, label in enumerate(label_list)}
 
     tokenized_inputs = tokenizer(
-            [example.words for example in examples],
+            [[tokenizer.cls_token if x == '<ROOT>' else x for x in example.words] for example in examples],
             padding='max_length',
             max_length=max_length,
             is_split_into_words=True,
@@ -383,19 +386,20 @@ def convert_parsed_examples_to_features(
     label_map = {label: i for i, label in enumerate(label_list)}
 
     tokenized_inputs = tokenizer(
-            [example.words for example in examples],
+            [[tokenizer.cls_token if x == '<ROOT>' else x for x in example.words] for example in examples],
             padding='max_length',
             max_length=max_length,
             is_split_into_words=True,
             return_token_type_ids=True)
     
-    features = []
-    if is_word_level:
-        word_masks, first_ids_list, word_lens = prepare_word_level_input(
-            attention_mask=[mask for mask in tokenized_inputs['attention_mask']],
-            word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
-            tokens=[example.words for example in examples])
+    word_masks, first_ids_list, word_lens = prepare_word_level_input(
+        attention_mask=[mask for mask in tokenized_inputs['attention_mask']],
+        word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+        tokens=[example.words for example in examples])
+    max_word_len = max(word_lens)
 
+    if is_word_level:
+        # generate word-level syntax graphs, for top GNN
         if official_syntax_type == "gold":
             heads, rels = flatten_heads_to_matrix(
                             word_masks=word_masks,
@@ -412,50 +416,8 @@ def convert_parsed_examples_to_features(
                         )
         else:
             print ("official_syntax_type: {} not defined.".format(official_syntax_type))
-
-        max_word_len = max(word_lens)
-        for (ex_index, example) in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example %d" % (ex_index))
-            word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
-            label_ids = np.ones(max_word_len, dtype=np.int32) * -100
-            for i in range(len(example.pred_senses)):
-                label_id = label_map[example.pred_senses[i]]
-                if label_id == 0:
-                    label_id = -100
-                label_ids[i] = label_id
-            predicate_mask = np.zeros(max_word_len, dtype=np.int32)
-            for word_pred_id in example.pred_ids:
-                predicate_mask[word_pred_id] = 1
-
-            if ex_index < 2:
-                logger.info("*** Example ***")
-                #logger.info("guid: %s" % (example.guid))
-                #logger.info("sid: %s" % (example.sid))
-                example.show()
-                logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
-                logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
-                logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-                logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
-                logger.info("labels: %s (ids = %s)" % (" ".join(example.pred_senses), " ".join([str(l) for l in label_ids])))
-                logger.info("word_mask: {}".format(word_masks[ex_index]))
-                logger.info("first_ids: {}".format(first_ids_list[ex_index]))
-                torch.set_printoptions(profile="full")
-                print ("\nheads:\n", heads[ex_index])
-                print ("\nrels:\n", rels[ex_index])
-
-            features.append(
-                InputParsedPredicateSenseFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                              predicate_mask=predicate_mask,
-                              label_ids=label_ids,
-                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
-                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
-                              word_mask=word_masks[ex_index],
-                              first_ids=first_ids_list[ex_index]))
     else:
+        # generate subword-level syntax graphs
         if official_syntax_type == "gold":
             heads, rels = align_flatten_heads(
                             attention_mask=tokenized_inputs['attention_mask'],
@@ -491,60 +453,69 @@ def convert_parsed_examples_to_features(
                             mask_types=mask_types
                         )
 
-        for ex_index, example in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example %d" % (ex_index))
-            word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
-            token_type_ids = tokenized_inputs['token_type_ids'][ex_index]
-            attention_mask = tokenized_inputs['attention_mask'][ex_index]
-            previous_word_idx = None
-            label_ids = []
-            for word_idx in word_ids:
-                if word_idx is None:
-                    label_ids.append(-100)
-                # argument must be in tokens_a and not pad
-                elif not (attention_mask[len(label_ids)] == 1 and token_type_ids[len(label_ids)]==0):
-                    label_ids.append(-100)
-                elif word_idx != previous_word_idx:
-                    label_id = label_map[example.pred_senses[word_idx]]
-                    if label_id == 0:
-                        label_id = -100
-                    label_ids.append(label_id)
-                else:
-                    label_ids.append(-100)
-                previous_word_idx = word_idx
-            #labels.append(label_ids)
-            predicate_mask = np.zeros(max_length, dtype=np.int32)
-            for word_pred_id in example.pred_ids:
-                token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, word_pred_id)
-                # use the first token as predicate
-                predicate_mask[token_pred_ids[0]] = 1
+    features = []
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 10000 == 0:
+            logger.info("Writing example %d" % (ex_index))
+        word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
+        # default is empty -100
+        #srl_heads = np.ones((max_word_len, max_word_len), dtype=np.int32) * -100
+        #srl_rels = np.ones((max_word_len, max_word_len), dtype=np.int32) * -100
+        srl_heads = np.zeros((max_word_len, max_word_len), dtype=np.int32)
+        srl_rels = np.zeros((max_word_len, max_word_len), dtype=np.int32)
+        for pred_id, pred_label in enumerate(example.pred_senses):
+            if pred_label not in ['<ROOT>','<PAD>','O']:
+                srl_heads[0][pred_id] = 1
+                pred_label = 'prd:'+pred_label
+                srl_rels[0][pred_id] = label_map[pred_label]
+        for i, pred_id in enumerate(example.pred_ids):
+            arg_labels = example.arg_labels[i]
+            for arg_id, arg_label in enumerate(arg_labels):
+                # set label for <ROOT> -100, so it is automatically ignored
+                if arg_label == '<ROOT>': continue
+                srl_heads[pred_id][arg_id] = 0 if arg_label == 'O' else 1
+                if arg_label not in ['<PAD>','O']:
+                    arg_label = 'arg:'+arg_label
+                srl_rels[pred_id][arg_id] = label_map[arg_label]
+        srl_heads = srl_heads.transpose(1,0)
+        srl_rels = srl_rels.transpose(1,0)
 
-            if ex_index < 2:
-                logger.info("*** Example ***")
-                #logger.info("guid: %s" % (example.guid))
-                #logger.info("sid: %s" % (example.sid))
-                example.show()
-                logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
-                logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
-                logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-                logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
-                logger.info("labels: %s (ids = %s)" % (" ".join(example.pred_senses), " ".join([str(l) for l in label_ids])))
-                torch.set_printoptions(profile="full")
-                print ("\nheads:\n", heads[ex_index])
-                print ("\nrels:\n", rels[ex_index])
-                if dists:
-                    print ("\ndists:\n", dists[ex_index])
+        srl_heads = torch.from_numpy(srl_heads).long().to_sparse()
+        srl_rels = torch.from_numpy(srl_rels).long().to_sparse()
 
-            features.append(
-                InputParsedPredicateSenseFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                              predicate_mask=predicate_mask,
-                              label_ids=label_ids,
-                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
-                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse()))
+        predicate_mask = np.zeros(max_word_len, dtype=np.int32)
+        for word_pred_id in example.pred_ids:
+            predicate_mask[word_pred_id] = 1
+
+        if ex_index < 2:
+            logger.info("*** Example ***")
+            #logger.info("guid: %s" % (example.guid))
+            #logger.info("sid: %s" % (example.sid))
+            example.show()
+            logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
+            logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
+            logger.info("pred_ids: %s, predicate_mask: %s" % (" ".join([str(x) for x in example.pred_ids]), " ".join([str(x) for x in predicate_mask])))
+            logger.info("srl_heads:\n{}".format(srl_heads))
+            logger.info("srl_rels:\n{}".format(srl_rels))
+            logger.info("word_mask: {}".format(word_masks[ex_index]))
+            logger.info("first_ids: {}".format(first_ids_list[ex_index]))
+            logger.info("heads:\n{}".format(heads))
+            logger.info("rels:\n{}".format(rels))
+
+        features.append(
+            InputParsedSrlEnd2EndFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                          attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                          token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                          predicate_mask=predicate_mask,
+                          srl_heads=srl_heads,
+                          srl_rels=srl_rels,
+                          word_mask=word_masks[ex_index],
+                          first_ids=first_ids_list[ex_index],
+                          heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
+                          rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse()))
+
     return features
 
 
@@ -576,8 +547,6 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         #parser_info = "gold-syntax"
         if args.parser_return_tensor:
             parser_info += "-3d"
-        if args.parser_compute_dist:
-            parser_info += "-dist"
         if args.parser_return_graph_mask:
             parser_info += "-mask-"+str(args.parser_n_mask)+"-"+"-".join(args.parser_mask_types)
         cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}_{}'.format(

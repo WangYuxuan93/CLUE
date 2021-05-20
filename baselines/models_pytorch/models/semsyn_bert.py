@@ -1213,7 +1213,7 @@ class WordLevelSemSynBertEncoder(nn.Module):
         hidden_states = self.gnn_encoder(
                                 hidden_states, 
                                 attention_mask=word_mask, 
-                                heads=heads, 
+                                heads=heads,
                                 rels=rels)
 
         return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)
@@ -1228,13 +1228,16 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
         self.config = config
         self.num_labels = config.num_labels
         self.mlp_size = 256
+        self.use_bilstm = config.use_bilstm
+        self.is_word_level = "is_word_level" in config.graph and config.graph["is_word_level"]
 
         self.bert = SemSynBertModel(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.input_encoder = VarFastLSTM(config.hidden_size, config.hidden_size, 
-                                         num_layers=3, batch_first=True, 
-                                         bidirectional=True, dropout=(0.2,0.2))
+        if self.use_bilstm:
+            self.input_encoder = VarFastLSTM(config.hidden_size, config.hidden_size, 
+                                             num_layers=3, batch_first=True, 
+                                             bidirectional=True, dropout=(0.2,0.2))
         self.activation = nn.LeakyReLU(0.1)
         self.mlp_dropout = nn.Dropout2d(p=0.2)
 
@@ -1242,8 +1245,9 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
         self.init_weights()
 
     def init_biaffine(self):
-        self.dense_p = nn.Linear(self.config.hidden_size*2, self.mlp_size)
-        self.dense_a = nn.Linear(self.config.hidden_size*2, self.mlp_size)
+        input_size = self.config.hidden_size*2 if self.use_bilstm else self.config.hidden_size
+        self.dense_p = nn.Linear(input_size, self.mlp_size)
+        self.dense_a = nn.Linear(input_size, self.mlp_size)
         self.rel_attention = BiaffineAttention(self.mlp_size, n_out=self.num_labels, bias_x=True, bias_y=True)
         self.reset_parameters()
 
@@ -1259,12 +1263,13 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
         input_ids=None,
         attention_mask=None,
         token_type_ids=None,
+        predicate_mask=None,
         first_ids=None,
         word_mask=None,
+        srl_heads=None,
+        srl_rels=None,
         heads=None,
         rels=None,
-        src_heads=None,
-        src_rels=None,
     ):
         batch_size, seq_len = first_ids.size()
         # (batch, seq_len), seq mask, where at position 0 is 0
@@ -1278,8 +1283,10 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
-            heads=src_heads,
-            rels=src_rels,
+            first_ids=first_ids,
+            word_mask=word_mask,
+            heads=heads,
+            rels=rels,
         )
 
         sequence_output = outputs[0]
@@ -1287,11 +1294,18 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
         sequence_output = self.dropout(sequence_output)
 
         size = list(first_ids.size()) + [sequence_output.size()[-1]]
-        # (batch, seq_len, hidden_size)
-        output = sequence_output.gather(1, first_ids.unsqueeze(-1).expand(size))
+
+        if not self.is_word_level:
+            # (batch, seq_len, hidden_size)
+            output = sequence_output.gather(1, first_ids.unsqueeze(-1).expand(size))
+        else:
+            output = sequence_output
         #print ("first_ids:", first_ids)
         #print ("output:", output.size())
-        encoder_output, _ = self.input_encoder(output, word_mask)
+        if self.use_bilstm:
+            encoder_output, _ = self.input_encoder(output, word_mask)
+        else:
+            encoder_output = output
 
         # (batch, seq_len, mlp_size)
         pred_hidden = self.activation(self.dense_p(encoder_output))
@@ -1308,9 +1322,9 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
         #print ("transposed_rel_logits:\n", transposed_rel_logits)
 
         loss = None
-        if rels is not None:
+        if srl_rels is not None:
             rel_loss_fct = nn.CrossEntropyLoss(reduction='none')
-            rel_loss = rel_loss_fct(rel_logits, rels)
+            rel_loss = rel_loss_fct(rel_logits, srl_rels)
             if mask_3D is not None:
                 rel_loss = rel_loss * mask_3D
             # do not need heads, use -100 to denote invalid columns
@@ -1320,5 +1334,5 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
 
             loss = rel_loss.mean()
 
-        output = (transposed_rel_logits) + outputs[2:]
+        output = (transposed_rel_logits,) + outputs[2:]
         return ((loss,) + output) if loss is not None else output

@@ -30,13 +30,12 @@ from tools.progressbar import ProgressBar
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
-from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
-from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForArgumentLabel, SemSynRobertaForPredicateSense
-from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
-from models.modeling_bert import BertForWordLevelArgumentLabel, BertForWordLevelPredicateSense
+from models.semsyn_bert import SemSynBertConfig
+from models.semsyn_roberta import SemSynRobertaConfig
+from models.semsyn_bert import SemSynBertForEnd2EndSrl
+from models.semsyn_roberta import SemSynRobertaForEnd2EndSrl
+from models.modeling_bert import BertConfig
 from models.modeling_bert import BertForEnd2EndSrl
-from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
-from models.modeling_roberta import RobertaForWordLevelArgumentLabel, RobertaForWordLevelPredicateSense
 from models.modeling_roberta import RobertaForEnd2EndSrl
 from io_utils.srl_writer import write_conll09_end2end
 import shutil
@@ -50,10 +49,8 @@ SCONFIG_CLASSES = {
 }
 
 SMODEL_CLASSES = {
-    'bert-arg': SemSynBertForArgumentLabel,
-    'roberta-arg': SemSynRobertaForArgumentLabel,
-    'bert-sense': SemSynBertForPredicateSense,
-    'roberta-sense': SemSynRobertaForPredicateSense,
+    'bert-srl': SemSynBertForEnd2EndSrl,
+    'roberta-srl': SemSynRobertaForEnd2EndSrl,
 }
 
 CONFIG_CLASSES = {
@@ -62,19 +59,6 @@ CONFIG_CLASSES = {
 }
 
 MODEL_CLASSES = {
-    'bert-arg': BertForArgumentLabel,
-    'roberta-arg': RobertaForArgumentLabel,
-    'bert-sense': BertForPredicateSense,
-    'roberta-sense': RobertaForPredicateSense,
-    'bert-srl': BertForEnd2EndSrl,
-    'roberta-srl': RobertaForEnd2EndSrl,
-}
-
-WORD_LEVEL_MODEL_CLASSES = {
-    'bert-arg': BertForWordLevelArgumentLabel,
-    'roberta-arg': RobertaForWordLevelArgumentLabel,
-    'bert-sense': BertForWordLevelPredicateSense,
-    'roberta-sense': RobertaForWordLevelPredicateSense,
     'bert-srl': BertForEnd2EndSrl,
     'roberta-srl': RobertaForEnd2EndSrl,
 }
@@ -88,7 +72,7 @@ def _prepare_inputs(inputs, device, use_dist=False, debug=False):
     for k, v in inputs.items():
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(device)
-
+    
     del inputs["dists"]
     if "first_ids" in inputs and inputs["first_ids"] is None:
         del inputs["first_ids"]
@@ -442,8 +426,8 @@ def main():
                         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name")
-    parser.add_argument("--task_name", default='conll09-zh-arg', type=str, required=True, choices=['conll09-en-sense','conll09-en-arg'
-                        ,'conll09-en-srl','conll09-zh-sense','conll09-zh-arg','conll09-zh-srl'],
+    parser.add_argument("--task_name", default='conll09-zh-arg', type=str, required=True, choices=['conll09-en-srl',
+                        'conll09-zh-srl'],
                         help="The name of the task")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
@@ -591,10 +575,7 @@ def main():
         tokenizer_class = AutoTokenizer
     else:
         config_class = CONFIG_CLASSES[args.model_type]
-        if args.is_word_level:
-            model_class = WORD_LEVEL_MODEL_CLASSES[args.model_type+'-'+args.task_type]
-        else:
-            model_class = MODEL_CLASSES[args.model_type+'-'+args.task_type]
+        model_class = MODEL_CLASSES[args.model_type+'-'+args.task_type]
         tokenizer_class = AutoTokenizer
 
     if args.local_rank == 0:
