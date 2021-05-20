@@ -47,7 +47,11 @@ def collate_fn(batch):
         all_srl_rels = all_srl_rels.to_dense()
     all_srl_heads = all_srl_heads[:, :max_word_len, :max_word_len]
     all_srl_rels = all_srl_rels[:, :max_word_len, :max_word_len]
-
+    #print ("all_srl_rels:\n", all_srl_rels)
+    neg_mask = torch.ones_like(all_srl_heads) * -100
+    all_srl_heads = torch.where(all_srl_heads==0, neg_mask, all_srl_heads)
+    all_srl_rels = torch.where(all_srl_rels==0, neg_mask, all_srl_rels)
+    #print ("all_srl_rels:\n", all_srl_rels)
     if all_heads is not None:
         if list(all_heads.size())[-1] == list(all_input_ids.size())[-1]:
             # subword-level syntax matrix
@@ -272,8 +276,10 @@ def convert_examples_to_features(
             logger.info("Writing example %d" % (ex_index))
         word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
         # default is empty -100
-        srl_heads = np.ones((max_word_len, max_word_len), dtype=np.int32) * -100
-        srl_rels = np.ones((max_word_len, max_word_len), dtype=np.int32) * -100
+        #srl_heads = np.ones((max_word_len, max_word_len), dtype=np.int32) * -100
+        #srl_rels = np.ones((max_word_len, max_word_len), dtype=np.int32) * -100
+        srl_heads = np.zeros((max_word_len, max_word_len), dtype=np.int32)
+        srl_rels = np.zeros((max_word_len, max_word_len), dtype=np.int32)
         for pred_id, pred_label in enumerate(example.pred_senses):
             if pred_label not in ['<ROOT>','<PAD>','O']:
                 srl_heads[0][pred_id] = 1

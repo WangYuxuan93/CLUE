@@ -99,7 +99,6 @@ def _prepare_inputs(inputs, device, use_dist=False, debug=False):
         del inputs["heads"]
         del inputs["rels"]
 
-
     return inputs
 
 def delete_old_checkpoints(output_dir, best_checkpoint, save_limit=1):
