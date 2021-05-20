@@ -309,7 +309,7 @@ def evaluate(args, model, tokenizer, prefix=""):
                 tmp_eval_loss, logits = outputs[:2]
                 eval_loss += tmp_eval_loss.mean().item()
             nb_eval_steps += 1
-            print ("logits: ", logits.size())
+            #print ("logits: ", logits.size())
             #print ("labels: ", inputs['labels'].size())
             preds.extend(get_predictions(logits, prd_mask, arg_mask))
             golds.extend([l for l in inputs['srl_rels'].detach().cpu().numpy()])
