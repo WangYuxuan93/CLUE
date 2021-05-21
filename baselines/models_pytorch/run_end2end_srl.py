@@ -19,7 +19,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from transformers import (WEIGHTS_NAME, AutoTokenizer, RobertaConfig)
 
-from transformers import AdamW, get_linear_schedule_with_warmup
+from transformers import AdamW, get_linear_schedule_with_warmup, get_polynomial_decay_schedule_with_warmup
 from metrics.srl_compute_metrics import compute_end2end_metrics
 from processors.srl_end2end_processor import collate_fn, SrlEnd2EndProcessor, load_and_cache_examples
 from processors.mappings.conll09_srl_end2end_mapping import conll09_english_num_arg_label, conll09_english_num_all_label
@@ -127,14 +127,30 @@ def train(args, train_dataset, model, tokenizer):
     args.warmup_steps = int(t_total * args.warmup_proportion)
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ['bias', 'LayerNorm.weight']
+    cls_param_indicator = args.classifier_params.split(':') if args.classifier_params is not None else []
+    cls_params = [(n,p) for n, p in model.named_parameters() if any(nd in n for nd in cls_param_indicator)]
+    lm_params = [(n,p) for n, p in model.named_parameters() if not any(nd in n for nd in cls_param_indicator)]
+    logger.info("Classifier params (lr={}) :\n{}".format(args.classifier_learning_rate, [x[0] for x in cls_params]))
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+        {'params': [p for n, p in lm_params if not any(nd in n for nd in no_decay)],
          'weight_decay': args.weight_decay},
-        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        {'params': [p for n, p in lm_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0},
+        {'params': [p for n, p in cls_params if not any(nd in n for nd in no_decay)], 
+         'lr': args.classifier_learning_rate, 'weight_decay': args.weight_decay},
+        {'params': [p for n, p in cls_params if any(nd in n for nd in no_decay)], 
+         'lr': args.classifier_learning_rate, 'weight_decay': 0.0},
     ]
+    #optimizer_grouped_parameters = [
+    #    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+    #     'weight_decay': args.weight_decay},
+    #    {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    #]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = get_linear_schedule_with_warmup(
-                    optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
+    #scheduler = get_linear_schedule_with_warmup(
+    #                optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
+    #        )
+    scheduler = get_polynomial_decay_schedule_with_warmup(
+                    optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total, lr_end=args.min_learning_rate,
             )
     #WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
     if args.fp16:
@@ -475,8 +491,14 @@ def main():
                         help="Batch size per GPU/CPU for evaluation.")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
-    parser.add_argument("--learning_rate", default=5e-5, type=float,
-                        help="The initial learning rate for Adam.")
+    parser.add_argument("--learning_rate", default=2e-5, type=float,
+                        help="The initial learning rate for language model.")
+    parser.add_argument("--min_learning_rate", default=1e-8, type=float,
+                        help="The minimum learning rate for language model.")
+    parser.add_argument("--classifier_learning_rate", default=1e-3, type=float,
+                        help="The initial learning rate for parameters not in language model.")
+    parser.add_argument("--classifier_params", default=None, type=str,
+                        help="classifier paramter names, for setting their lr, split by : (input_encoder:dense_p:dense_a:rel_attention)")
     parser.add_argument("--weight_decay", default=0.01, type=float,
                         help="Weight deay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,

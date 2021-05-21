@@ -22,6 +22,8 @@ from models.graph_convolution import GCNLayer, RGCNLayer
 from models.graph_attention import GATLayer
 from models.gnn_encoder import GNNEncoder
 from models.graph_mask_encoder import BertGraphMaskLayer
+from .modeling_bert import BiaffineAttention
+from neuronlp2.nn import VarFastLSTM
 
 import logging
 logger = logging.getLogger(__name__)
