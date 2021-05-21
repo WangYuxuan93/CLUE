@@ -30,9 +30,9 @@ from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 from models.semsyn_bert import SemSynBertConfig, SemSynBertForArgumentLabel, SemSynBertForPredicateSense
 from models.semsyn_roberta import SemSynRobertaConfig, SemSynRobertaForArgumentLabel, SemSynRobertaForPredicateSense
-from models.modeling_bert import BertConfig, BertForArgumentLabel, BertForPredicateSense
+from models.modeling_bert import BertConfig #, BertForArgumentLabel, BertForPredicateSense
 from models.modeling_bert import BertForWordLevelArgumentLabel, BertForWordLevelPredicateSense
-from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
+#from models.modeling_roberta import RobertaForArgumentLabel, RobertaForPredicateSense
 from models.modeling_roberta import RobertaForWordLevelArgumentLabel, RobertaForWordLevelPredicateSense
 from io_utils.srl_writer import write_conll09_predicate_sense, write_conll09_argument_label
 import shutil
@@ -57,12 +57,12 @@ CONFIG_CLASSES = {
     'roberta': RobertaConfig,
 }
 
-MODEL_CLASSES = {
-    'bert-arg': BertForArgumentLabel,
-    'roberta-arg': RobertaForArgumentLabel,
-    'bert-sense': BertForPredicateSense,
-    'roberta-sense': RobertaForPredicateSense,
-}
+#MODEL_CLASSES = {
+#    'bert-arg': BertForArgumentLabel,
+#    'roberta-arg': RobertaForArgumentLabel,
+#    'bert-sense': BertForPredicateSense,
+#    'roberta-sense': RobertaForPredicateSense,
+#}
 
 WORD_LEVEL_MODEL_CLASSES = {
     'bert-arg': BertForWordLevelArgumentLabel,
@@ -203,15 +203,6 @@ def train(args, train_dataset, model, tokenizer):
             #batch = tuple(t.to(args.device) for t in batch)
             inputs = _prepare_inputs(batch, args.device)
             #print ("batch:\n", batch)
-            """
-            inputs = {'input_ids': batch[0],
-                      'attention_mask': batch[1],
-                      'labels': batch[3]}
-            if args.model_type != 'distilbert':
-                inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet', 'albert',
-                                                                           'roberta'] else None  # XLM, DistilBERT don't use segment_ids
-            """
-
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
@@ -428,7 +419,7 @@ def main():
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
     parser.add_argument("--model_type", default=None, type=str, required=True,
-                        help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
+                        help="Model type selected in the list: " + ", ".join(WORD_LEVEL_MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name")
     parser.add_argument("--task_name", default='conll09-zh-arg', type=str, required=True, choices=['conll09-en-sense','conll09-en-arg'
@@ -579,10 +570,7 @@ def main():
         tokenizer_class = AutoTokenizer
     else:
         config_class = CONFIG_CLASSES[args.model_type]
-        if args.is_word_level:
-            model_class = WORD_LEVEL_MODEL_CLASSES[args.model_type+'-'+args.task_type]
-        else:
-            model_class = MODEL_CLASSES[args.model_type+'-'+args.task_type]
+        model_class = WORD_LEVEL_MODEL_CLASSES[args.model_type+'-'+args.task_type]
         tokenizer_class = AutoTokenizer
 
     if args.local_rank == 0:

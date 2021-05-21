@@ -564,7 +564,7 @@ class SemSynRobertaForArgumentLabel(RobertaPreTrainedModel):
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            mask = word_mask if self.is_word_level else attention_mask
+            mask = word_mask
             # Only keep active parts of the loss
             if mask is not None:
                 active_loss = mask.contiguous().view(-1) == 1
@@ -661,7 +661,7 @@ class SemSynRobertaForPredicateSense(RobertaPreTrainedModel):
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            mask = word_mask if self.is_word_level else attention_mask
+            mask = word_mask
             # Only keep active parts of the loss
             if mask is not None:
                 active_loss = mask.contiguous().view(-1) == 1

@@ -47,17 +47,8 @@ def collate_fn(batch):
     """
     num_items = len(batch[0])
     all_heads, all_rels, all_dists = None, None, None
-    all_first_ids, all_word_mask = None, None
-    if num_items == 5:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels = map(torch.stack, zip(*batch))
-    elif num_items == 7:
-        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
-        # if len == 7, the last two has 2 possible choice
-        # if the tensor is not sparse and is 2D, then it is first_ids
-        if not all_heads.is_sparse and len(all_heads.size()) == 2:
-            all_first_ids = all_heads
-            all_word_mask = all_rels
-            all_heads, all_rels = None, None
+    if num_items == 7:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask = map(torch.stack, zip(*batch))
     elif num_items == 9:
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask, all_heads, all_rels = map(torch.stack, zip(*batch))
     max_len = max(all_attention_mask.sum(-1)).item()
@@ -65,19 +56,19 @@ def collate_fn(batch):
     all_attention_mask = all_attention_mask[:, :max_len]
     all_token_type_ids = all_token_type_ids[:, :max_len]
 
-    if all_word_mask is not None:
-        max_word_len = max(all_word_mask.sum(-1)).item()
-        all_first_ids = all_first_ids[:, :max_word_len]
-        all_word_mask = all_word_mask[:, :max_word_len]
-        all_predicate_mask = all_predicate_mask[:, :max_word_len]
-        all_labels = all_labels[:, :max_word_len]
-        head_max_len = max_word_len
-    else:
-        all_predicate_mask = all_predicate_mask[:, :max_len]
-        all_labels = all_labels[:, :max_len]
-        head_max_len = max_len
+    max_word_len = max(all_word_mask.sum(-1)).item()
+    all_first_ids = all_first_ids[:, :max_word_len]
+    all_word_mask = all_word_mask[:, :max_word_len]
+    all_predicate_mask = all_predicate_mask[:, :max_word_len]
+    all_labels = all_labels[:, :max_word_len]
 
     if all_heads is not None:
+        if list(all_heads.size())[-1] == list(all_input_ids.size())[-1]:
+            # subword-level syntax matrix
+            head_max_len = max_len
+        else:
+            # word-level syntax matrix
+            head_max_len = max_word_len
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
             all_rels = all_rels.to_dense()
@@ -225,26 +216,19 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
     all_predicate_mask = torch.tensor([f.predicate_mask for f in features], dtype=torch.long)
     all_labels = torch.tensor([f.label_ids for f in features], dtype=torch.long)
-    # for word level model
-    if args.is_word_level:
-        all_first_ids = torch.tensor([f.first_ids for f in features], dtype=torch.long)
-        all_word_mask = torch.tensor([f.word_mask for f in features], dtype=torch.long)
+    # use word level label for all cases
+    all_first_ids = torch.tensor([f.first_ids for f in features], dtype=torch.long)
+    all_word_mask = torch.tensor([f.word_mask for f in features], dtype=torch.long)
 
     if args.parser_model is None and not args.official_syntax_type:
-        if args.is_word_level:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
                                 all_first_ids, all_word_mask)
-        else:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels)
     else:
         all_heads = torch.stack([f.heads for f in features])
         all_rels = torch.stack([f.rels for f in features])
-        if args.is_word_level:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
                                 all_first_ids, all_word_mask, all_heads, all_rels)
-        else:
-            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
-                                all_heads, all_rels)
+
 
     if return_examples:
         return dataset, examples

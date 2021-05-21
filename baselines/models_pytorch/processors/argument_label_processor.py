@@ -199,98 +199,48 @@ def convert_examples_to_features(
             return_token_type_ids=True)
 
     features = []
-    if is_word_level:
-        word_masks, first_ids_list, word_lens = prepare_word_level_input(
-            attention_mask=[mask for mask in tokenized_inputs['attention_mask']],
-            word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
-            tokens=[example.tokens_a for example in examples])
-        max_word_len = max(word_lens)
-        for (ex_index, example) in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example %d" % (ex_index))
-            word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
-            # default is empty -100
-            label_ids = np.ones(max_word_len, dtype=np.int32) * -100
-            for i in range(len(example.labels)):
-                label_id = label_map[example.labels[i]]
-                if label_id == 0:
-                    label_id = -100
-                label_ids[i] = label_id
-            predicate_mask = np.zeros(max_word_len, dtype=np.int32)
-            predicate_mask[example.pred_id] = 1
+    word_masks, first_ids_list, word_lens = prepare_word_level_input(
+        attention_mask=[mask for mask in tokenized_inputs['attention_mask']],
+        word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+        tokens=[example.tokens_a for example in examples])
+    max_word_len = max(word_lens)
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 10000 == 0:
+            logger.info("Writing example %d" % (ex_index))
+        word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
+        # default is empty -100
+        label_ids = np.ones(max_word_len, dtype=np.int32) * -100
+        for i in range(len(example.labels)):
+            label_id = label_map[example.labels[i]]
+            if label_id == 0:
+                label_id = -100
+            label_ids[i] = label_id
+        predicate_mask = np.zeros(max_word_len, dtype=np.int32)
+        predicate_mask[example.pred_id] = 1
 
-            if ex_index < 2:
-                logger.info("*** Example ***")
-                #logger.info("guid: %s" % (example.guid))
-                #logger.info("sid: %s" % (example.sid))
-                example.show()
-                logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
-                logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
-                logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-                logger.info("pred_id: %d, predicate_mask: %s" % (example.pred_id, " ".join([str(x) for x in predicate_mask])))
-                logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
-                logger.info("word_mask: {}".format(word_masks[ex_index]))
-                logger.info("first_ids: {}".format(first_ids_list[ex_index]))
+        if ex_index < 2:
+            logger.info("*** Example ***")
+            #logger.info("guid: %s" % (example.guid))
+            #logger.info("sid: %s" % (example.sid))
+            example.show()
+            logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
+            logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
+            logger.info("pred_id: %d, predicate_mask: %s" % (example.pred_id, " ".join([str(x) for x in predicate_mask])))
+            logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
+            logger.info("word_mask: {}".format(word_masks[ex_index]))
+            logger.info("first_ids: {}".format(first_ids_list[ex_index]))
 
-            features.append(
-                InputArgumentLabelFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                              predicate_mask=predicate_mask,
-                              label_ids=label_ids,
-                              word_mask=word_masks[ex_index],
-                              first_ids=first_ids_list[ex_index]))
-    else:
-        for (ex_index, example) in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example %d" % (ex_index))
-            word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
-            token_type_ids = tokenized_inputs['token_type_ids'][ex_index]
-            attention_mask = tokenized_inputs['attention_mask'][ex_index]
-            input_ids = tokenized_inputs['input_ids'][ex_index]
-            previous_word_idx = None
-            label_ids = []
-            valid_label_flag = True
-            for word_idx in word_ids:
-                #print ("word_idx: {}, flag: {}, input_id:{}".format(word_idx, valid_label_flag, input_ids[len(label_ids)]))
-                # the first time meets sep token, all following should be -100
-                if input_ids[len(label_ids)] == tokenizer.sep_token_id:
-                    valid_label_flag = False
-                if not valid_label_flag or word_idx is None:
-                    label_ids.append(-100)
-                elif word_idx != previous_word_idx:
-                    label_id = label_map[example.labels[word_idx]]
-                    if label_id == 0:
-                        label_id = -100
-                    label_ids.append(label_id)
-                else:
-                    label_ids.append(-100)
-                previous_word_idx = word_idx
-            #labels.append(label_ids)
-            predicate_mask = np.zeros(max_length, dtype=np.int32)
-            token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, example.pred_id)
-            # use the first token as predicate
-            predicate_mask[token_pred_ids[0]] = 1
+        features.append(
+            InputArgumentLabelFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                          attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                          token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                          predicate_mask=predicate_mask,
+                          label_ids=label_ids,
+                          word_mask=word_masks[ex_index],
+                          first_ids=first_ids_list[ex_index]))
 
-            if ex_index < 2:
-                logger.info("*** Example ***")
-                #logger.info("guid: %s" % (example.guid))
-                #logger.info("sid: %s" % (example.sid))
-                example.show()
-                logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
-                logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
-                logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-                logger.info("pred_id: %d, token_pred_id: %d, predicate_mask: %s" % (example.pred_id, token_pred_ids[0], " ".join([str(x) for x in predicate_mask])))
-                logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
-
-            features.append(
-                InputArgumentLabelFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                              predicate_mask=predicate_mask,
-                              label_ids=label_ids))
     return features
 
 
@@ -351,14 +301,14 @@ def convert_parsed_examples_to_features(
             max_length=max_length,
             is_split_into_words=True,
             return_token_type_ids=True)
-        
-    features = []
-    if is_word_level:
-        word_masks, first_ids_list, word_lens = prepare_word_level_input(
+    
+    word_masks, first_ids_list, word_lens = prepare_word_level_input(
             attention_mask=[mask for mask in tokenized_inputs['attention_mask']],
             word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
             tokens=[example.tokens_a for example in examples])
 
+    features = []
+    if is_word_level:
         if official_syntax_type == "gold":
             heads, rels = flatten_heads_to_matrix(
                             word_masks=word_masks,
@@ -375,49 +325,6 @@ def convert_parsed_examples_to_features(
                         )
         else:
             print ("official_syntax_type: {} not defined.".format(official_syntax_type))
-
-        max_word_len = max(word_lens)
-        for (ex_index, example) in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example %d" % (ex_index))
-            word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
-            label_ids = np.ones(max_word_len, dtype=np.int32) * -100
-            for i in range(len(example.labels)):
-                label_id = label_map[example.labels[i]]
-                if label_id == 0:
-                    label_id = -100
-                label_ids[i] = label_id
-            predicate_mask = np.zeros(max_word_len, dtype=np.int32)
-            predicate_mask[example.pred_id] = 1
-
-            if ex_index < 2:
-                logger.info("*** Example ***")
-                #logger.info("guid: %s" % (example.guid))
-                #logger.info("sid: %s" % (example.sid))
-                example.show()
-                logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
-                logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
-                logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-                logger.info("pred_id: %d, predicate_mask: %s" % (example.pred_id, " ".join([str(x) for x in predicate_mask])))
-                logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
-                logger.info("word_mask: {}".format(word_masks[ex_index]))
-                logger.info("first_ids: {}".format(first_ids_list[ex_index]))
-                torch.set_printoptions(profile="full")
-                print ("\nheads:\n", heads[ex_index])
-                print ("\nrels:\n", rels[ex_index])
-
-            features.append(
-                InputParsedArgumentLabelFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                              predicate_mask=predicate_mask,
-                              label_ids=label_ids,
-                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
-                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
-                              word_mask=word_masks[ex_index],
-                              first_ids=first_ids_list[ex_index]))
-
     else:
         if official_syntax_type == "gold":
             heads, rels = align_flatten_heads(
@@ -480,58 +387,46 @@ def convert_parsed_examples_to_features(
                             mask_types=mask_types
                         )
 
-        for ex_index, example in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example %d" % (ex_index))
-            word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
-            token_type_ids = tokenized_inputs['token_type_ids'][ex_index]
-            attention_mask = tokenized_inputs['attention_mask'][ex_index]
-            input_ids = tokenized_inputs['input_ids'][ex_index]
-            previous_word_idx = None
-            label_ids = []
-            valid_label_flag = True
-            for word_idx in word_ids:
-                #print ("word_idx: {}, flag: {}, input_id:{}".format(word_idx, valid_label_flag, input_ids[len(label_ids)]))
-                # the first time meets sep token, all following should be -100
-                if input_ids[len(label_ids)] == tokenizer.sep_token_id:
-                    valid_label_flag = False
-                if not valid_label_flag or word_idx is None:
-                    label_ids.append(-100)
-                elif word_idx != previous_word_idx:
-                    label_id = label_map[example.labels[word_idx]]
-                    if label_id == 0:
-                        label_id = -100
-                    label_ids.append(label_id)
-                else:
-                    label_ids.append(-100)
-                previous_word_idx = word_idx
-            #labels.append(label_ids)
-            predicate_mask = np.zeros(max_length, dtype=np.int32)
-            token_pred_ids = tokenized_inputs.word_to_tokens(ex_index, example.pred_id)
-            # use the first token as predicate
-            predicate_mask[token_pred_ids[0]] = 1
+    max_word_len = max(word_lens)
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 10000 == 0:
+            logger.info("Writing example %d" % (ex_index))
+        word_ids = tokenized_inputs.word_ids(batch_index=ex_index)
+        label_ids = np.ones(max_word_len, dtype=np.int32) * -100
+        for i in range(len(example.labels)):
+            label_id = label_map[example.labels[i]]
+            if label_id == 0:
+                label_id = -100
+            label_ids[i] = label_id
+        predicate_mask = np.zeros(max_word_len, dtype=np.int32)
+        predicate_mask[example.pred_id] = 1
 
-            if ex_index < 2:
-                logger.info("*** Example ***")
-                #logger.info("guid: %s" % (example.guid))
-                #logger.info("sid: %s" % (example.sid))
-                example.show()
-                logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
-                logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
-                logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
-                logger.info("pred_id: %d, token_pred_id: %d, predicate_mask: %s" % (example.pred_id, token_pred_ids[0], " ".join([str(x) for x in predicate_mask])))
-                logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
-                torch.set_printoptions(profile="full")
-                print ("\nheads:\n", heads[ex_index])
-                print ("\nrels:\n", rels[ex_index])
+        if ex_index < 2:
+            logger.info("*** Example ***")
+            #logger.info("guid: %s" % (example.guid))
+            #logger.info("sid: %s" % (example.sid))
+            example.show()
+            logger.info("word_ids: %s" % (" ".join([str(x) for x in word_ids])))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in tokenized_inputs['input_ids'][ex_index]]))
+            logger.info("attention_mask: %s" % " ".join([str(x) for x in tokenized_inputs['attention_mask'][ex_index]]))
+            logger.info("token_type_ids: %s" % " ".join([str(x) for x in tokenized_inputs['token_type_ids'][ex_index]]))
+            logger.info("pred_id: %d, predicate_mask: %s" % (example.pred_id, " ".join([str(x) for x in predicate_mask])))
+            logger.info("labels: %s (ids = %s)" % (" ".join(example.labels), " ".join([str(l) for l in label_ids])))
+            logger.info("word_mask: {}".format(word_masks[ex_index]))
+            logger.info("first_ids: {}".format(first_ids_list[ex_index]))
+            torch.set_printoptions(profile="full")
+            print ("\nheads:\n", heads[ex_index])
+            print ("\nrels:\n", rels[ex_index])
 
-            features.append(
-                InputParsedArgumentLabelFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                              predicate_mask=predicate_mask,
-                              label_ids=label_ids,
-                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
-                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse()))
+        features.append(
+            InputParsedArgumentLabelFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                          attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                          token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                          predicate_mask=predicate_mask,
+                          label_ids=label_ids,
+                          heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
+                          rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
+                          word_mask=word_masks[ex_index],
+                          first_ids=first_ids_list[ex_index]))
+
     return features
