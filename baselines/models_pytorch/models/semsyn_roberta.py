@@ -516,40 +516,25 @@ class SemSynRobertaForArgumentLabel(RobertaPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.is_word_level:
-            outputs = self.roberta(
-                input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                first_ids=first_ids,
-                word_mask=word_mask,
-                position_ids=position_ids,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                heads=heads,
-                rels=rels,
-            )
-        else:
-            outputs = self.roberta(
-                input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                position_ids=position_ids,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                heads=heads,
-                rels=rels,
-            )
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            first_ids=first_ids,
+            word_mask=word_mask,
+            heads=heads,
+            rels=rels,
+        )
 
         sequence_output = outputs[0]
-        # (batch, seq_len, hidden_size)
+
         sequence_output = self.dropout(sequence_output)
+
+        size = list(first_ids.size()) + [sequence_output.size()[-1]]
+
+        if not self.is_word_level:
+            # (batch, seq_len, hidden_size)
+            sequence_output = sequence_output.gather(1, first_ids.unsqueeze(-1).expand(size))
 
         # change 0/1 to bool matrix, must assure that each line has exactly one 1
         predicate_hidden = sequence_output[(predicate_mask == 1)] 
@@ -622,40 +607,26 @@ class SemSynRobertaForPredicateSense(RobertaPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.is_word_level:
-            outputs = self.roberta(
-                input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                first_ids=first_ids,
-                word_mask=word_mask,
-                position_ids=position_ids,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                heads=heads,
-                rels=rels,
-            )
-        else:
-            outputs = self.roberta(
-                input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                position_ids=position_ids,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                heads=heads,
-                rels=rels,
-            )
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            first_ids=first_ids,
+            word_mask=word_mask,
+            heads=heads,
+            rels=rels,
+        )
 
         sequence_output = outputs[0]
-        
+
         sequence_output = self.dropout(sequence_output)
+
+        size = list(first_ids.size()) + [sequence_output.size()[-1]]
+
+        if not self.is_word_level:
+            # (batch, seq_len, hidden_size)
+            sequence_output = sequence_output.gather(1, first_ids.unsqueeze(-1).expand(size))
+
         logits = self.classifier(sequence_output)
 
         loss = None
