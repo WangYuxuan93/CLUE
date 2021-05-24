@@ -52,7 +52,8 @@ def collate_fn(batch):
     elif num_items == 9:
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask, all_heads, all_rels = map(torch.stack, zip(*batch))
     max_len = max(all_attention_mask.sum(-1)).item()
-    all_input_ids = all_input_ids[:, :max_len]
+    # save the original input_ids for max_head_len
+    all_input_ids_ = all_input_ids[:, :max_len]
     all_attention_mask = all_attention_mask[:, :max_len]
     all_token_type_ids = all_token_type_ids[:, :max_len]
 
@@ -63,12 +64,15 @@ def collate_fn(batch):
     all_labels = all_labels[:, :max_word_len]
 
     if all_heads is not None:
+        #print ("all_heads:", all_heads.size())
+        #print ("all_input_ids:", all_input_ids.size())
         if list(all_heads.size())[-1] == list(all_input_ids.size())[-1]:
             # subword-level syntax matrix
             head_max_len = max_len
         else:
             # word-level syntax matrix
             head_max_len = max_word_len
+        #print ("max={}, max_word={}, max_head={}".format(max_len, max_word_len, head_max_len))
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
             all_rels = all_rels.to_dense()
@@ -83,7 +87,7 @@ def collate_fn(batch):
         all_dists = all_dists[:, :head_max_len, :head_max_len]
     
     batch = {}
-    batch["input_ids"] = all_input_ids
+    batch["input_ids"] = all_input_ids_
     batch["attention_mask"] = all_attention_mask
     batch["token_type_ids"] = all_token_type_ids
     batch["predicate_mask"] = all_predicate_mask
