@@ -8,6 +8,7 @@ from torch.utils.data import TensorDataset
 from .utils import DataProcessor
 from .mappings.conll09_srl_end2end_mapping import conll09_english_end2end_mapping, conll09_english_num_arg_label
 from .mappings.conll09_srl_end2end_mapping import conll09_chinese_end2end_mapping, conll09_chinese_num_arg_label
+from .mappings.upb_srl_end2end_mapping import upb_chinese_end2end_mapping, upb_chinese_num_arg_label
 from processors.processor import cached_features_filename
 from processors.srl_processor import InputConll09Example, SrlProcessor, align_flatten_heads
 from processors.srl_processor import prepare_word_level_input, flatten_heads_to_matrix
@@ -151,15 +152,19 @@ class SrlEnd2EndProcessor(SrlProcessor):
 
     def get_labels(self):
         """See base class."""
-        if self.lan == 'zh':
+        if self.task.startswith('conll09-zh'):
             self.label_map = conll09_chinese_end2end_mapping
-        elif self.lan == 'en':
+        elif self.task.startswith('conll09-en'):
             self.label_map = conll09_english_end2end_mapping
+        elif self.task.startswith('upb-zh'):
+            self.label_map = upb_chinese_end2end_mapping
         return list(self.label_map.keys())
 
     def get_arg_label_mask(self):
         mask = np.zeros(len(self.label_map))
         num_arg_label = conll09_chinese_num_arg_label if self.lan == 'zh' else conll09_english_num_arg_label
+        if self.task.startswith('upb-zh'):
+            num_arg_label = upb_chinese_num_arg_label
         for i in range(len(mask)):
             if i < num_arg_label:
                 mask[i] = 1

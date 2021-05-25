@@ -423,7 +423,7 @@ def main():
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name")
     parser.add_argument("--task_name", default='conll09-zh-arg', type=str, required=True, choices=['conll09-en-sense','conll09-en-arg'
-                        ,'conll09-zh-sense','conll09-zh-arg'],
+                        ,'conll09-zh-sense','conll09-zh-arg','upb-zh-sense','upb-zh-arg'],
                         help="The name of the task")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")

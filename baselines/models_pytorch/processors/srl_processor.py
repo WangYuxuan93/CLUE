@@ -7,7 +7,8 @@ import numpy as np
 from torch.utils.data import TensorDataset
 from .utils import DataProcessor
 from processors.processor import cached_features_filename
-from .common import conll09_chinese_syntax_label_mapping, conll09_english_syntax_label_mapping
+from .mappings.conll09_srl_pipeline_mapping import conll09_chinese_syntax_label_mapping, conll09_english_syntax_label_mapping
+from .mappings.upb_srl_pipeline_mapping import upb_chinese_syntax_label_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +80,13 @@ class SrlProcessor(DataProcessor):
         raise NameError("get_labels() is not defined!")
 
     def get_syntax_label_map(self):
-        if self.lan == 'zh':
+        #if self.lan == 'zh':
+        if self.task.startswith('conll09-zh'):
             self.syntax_label_map = conll09_chinese_syntax_label_mapping
-        elif self.lan == 'en':
+        elif self.task.startswith('conll09-en'):
             self.syntax_label_map = conll09_english_syntax_label_mapping
+        elif self.task.startswith('upb-zh'):
+            self.syntax_label_map = upb_chinese_syntax_label_mapping
         # label for inner-word arc
         #self.syntax_label_map['<WORD>'] = len(self.syntax_label_map)
         return self.syntax_label_map

@@ -5,12 +5,13 @@
 # @Last Modified time: 2020-01-01 11:46:07
 
 lan=zh
-TASK_NAME="conll09-$lan-srl"
+task=upb
+TASK_NAME="$task-$lan-srl"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
 export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/models/$lan-roberta-base
 #export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/models/roberta-base
-export DATA_DIR=$CURRENT_DIR/data/$lan
+export DATA_DIR=$CURRENT_DIR/data/$task-$lan
 PARSER_MODEL=/mnt/hgfs/share/parser_model/zh-news-biaf-basic
 
 # make output dir
@@ -35,6 +36,8 @@ if [ $# == 0 ]; then
       --parser_expand_type copy-word \
       --parser_n_mask 3 \
       --parser_mask_types parent:child \
+      --do_train \
+      --do_eval \
       --do_predict \
       --do_lower_case \
       --data_dir=$DATA_DIR/ \
@@ -42,7 +45,7 @@ if [ $# == 0 ]; then
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=2 \
       --learning_rate=5e-5 \
-      --num_train_epochs=30.0 \
+      --num_train_epochs=20.0 \
       --max_steps=0 \
       --logging_steps=10 \
       --save_steps=10 \
