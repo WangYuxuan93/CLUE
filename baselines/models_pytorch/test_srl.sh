@@ -5,12 +5,13 @@
 # @Last Modified time: 2020-01-01 11:46:07
 
 lan=zh
-TASK_NAME="conll09-$lan-sense"
+task=upb
+TASK_NAME="$task-$lan-sense"
 CURRENT_DIR=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 export CUDA_VISIBLE_DEVICES="0"
 export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/models/$lan-roberta-base
 #export BERT_PRETRAINED_MODELS_DIR=/mnt/hgfs/share/models/roberta-base
-export DATA_DIR=$CURRENT_DIR/data/$lan
+export DATA_DIR=$CURRENT_DIR/data/$task-$lan
 PARSER_MODEL=/mnt/hgfs/share/parser_model/zh-news-biaf-basic
 
 # make output dir
@@ -39,7 +40,7 @@ if [ $# == 0 ]; then
       --do_predict \
       --do_lower_case \
       --data_dir=$DATA_DIR/ \
-      --max_seq_length=32 \
+      --max_seq_length=40 \
       --per_gpu_train_batch_size=16 \
       --per_gpu_eval_batch_size=2 \
       --learning_rate=5e-5 \

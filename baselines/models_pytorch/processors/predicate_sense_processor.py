@@ -6,7 +6,8 @@ import torch
 import numpy as np
 from torch.utils.data import TensorDataset
 from .utils import DataProcessor
-from .common import conll09_chinese_sense_mapping, conll09_english_sense_mapping
+from .mappings.conll09_srl_pipeline_mapping import conll09_chinese_sense_mapping, conll09_english_sense_mapping
+from .mappings.upb_srl_pipeline_mapping import upb_chinese_sense_mapping
 from processors.processor import cached_features_filename
 from processors.srl_processor import SrlProcessor, align_flatten_heads
 from processors.srl_processor import prepare_word_level_input, flatten_heads_to_matrix
@@ -69,10 +70,12 @@ class PredicateSenseProcessor(SrlProcessor):
 
     def get_labels(self):
         """See base class."""
-        if self.lan == 'zh':
+        if self.task.startswith('conll09-zh'):
             self.label_map = conll09_chinese_sense_mapping
-        elif self.lan == 'en':
+        elif self.task.startswith('conll09-en'):
             self.label_map = conll09_english_sense_mapping
+        elif self.task.startswith('upb-zh'):
+            self.label_map = upb_chinese_sense_mapping
         return list(self.label_map.keys())
 
 def convert_examples_to_features(

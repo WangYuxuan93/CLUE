@@ -24,6 +24,7 @@ from metrics.srl_compute_metrics import compute_end2end_metrics
 from processors.srl_end2end_processor import collate_fn, SrlEnd2EndProcessor, load_and_cache_examples
 from processors.mappings.conll09_srl_end2end_mapping import conll09_english_num_arg_label, conll09_english_num_all_label
 from processors.mappings.conll09_srl_end2end_mapping import conll09_chinese_num_arg_label, conll09_chinese_num_all_label
+from processors.mappings.upb_srl_end2end_mapping import upb_chinese_num_arg_label, upb_chinese_num_all_label
 from tools.common import seed_everything, save_numpy
 from tools.common import init_logger, logger
 from tools.progressbar import ProgressBar
@@ -283,7 +284,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
         eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, data_type='dev')
-        prd_mask, arg_mask = get_arg_prd_mask(eval_task.split('-')[1])
+        prd_mask, arg_mask = get_arg_prd_mask(eval_task)
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
 
@@ -339,7 +340,7 @@ def predict(args, model, tokenizer, label_list, prefix="", is_ood=False):
     for pred_task, pred_output_dir in zip(pred_task_names, pred_outputs_dirs):
         pred_dataset, pred_examples = load_and_cache_examples(args, pred_task, tokenizer, data_type=data_type, 
                                                               return_examples=True)
-        prd_mask, arg_mask = get_arg_prd_mask(pred_task.split('-')[1])
+        prd_mask, arg_mask = get_arg_prd_mask(pred_task)
         if not os.path.exists(pred_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(pred_output_dir)
 
@@ -399,9 +400,17 @@ def load_labels_from_json(path):
     return parser_label2id
 
 
-def get_arg_prd_mask(lan):
-    num_arg = conll09_chinese_num_arg_label if lan == 'zh' else conll09_english_num_arg_label
-    num_all = conll09_chinese_num_all_label if lan == 'zh' else conll09_english_num_all_label
+def get_arg_prd_mask(task):
+    if task.startswith('conll09-zh'):
+        num_arg = conll09_chinese_num_arg_label
+        num_all = conll09_chinese_num_all_label
+    elif task.startswith('conll09-en'):
+        num_arg = conll09_english_num_arg_label
+        num_all = conll09_english_num_all_label
+    elif task.startswith('upb-zh'):
+        num_arg = upb_chinese_num_arg_label
+        num_all = upb_chinese_num_all_label
+
     num_prd = num_all - num_arg
     arg_mask = np.append(np.ones(num_arg),np.zeros(num_prd))
     prd_mask = 1 - arg_mask
@@ -443,7 +452,7 @@ def main():
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name")
     parser.add_argument("--task_name", default='conll09-zh-arg', type=str, required=True, choices=['conll09-en-srl',
-                        'conll09-zh-srl'],
+                        'conll09-zh-srl','upb-zh-srl'],
                         help="The name of the task")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
