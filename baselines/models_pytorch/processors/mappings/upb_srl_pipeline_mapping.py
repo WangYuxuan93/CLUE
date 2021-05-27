@@ -79,5 +79,19 @@ upb_chinese_syntax_label_mapping = {
     "csubjpass": 37,
     "remnant": 38,
     "vocative": 39,
-    "<WORD>": 40
+    "parataxis":40,
+    "csubj:pass":41,
+    "mark:comp":42,
+    "flat:name":43,
+    "aux:pass":44,
+    "obl:patient":45,
+    "obl":46,
+    "nsubj:pass":47,
+    "flat:foreign":48,
+    "mark:relcl":49,
+    "clf":50,
+    "obj":51,
+    "mark:advb":52,
+    "compound":53,
+    "<WORD>": 54
 }
