@@ -63,7 +63,7 @@ class SrlProcessor(DataProcessor):
             data = f.read().strip().split("\n\n")
             for sent in data:
                 lines = sent.strip().split("\n")
-                sents.append([line.split() for line in lines])
+                sents.append([line.split() for line in lines if not line.startswith("#")]) # Jeffrey
         return sents
 
     def get_examples(self, data_dir, data_type="train"):
