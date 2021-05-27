@@ -78,5 +78,6 @@ upb_chinese_syntax_label_mapping = {
     "dislocated": 36,
     "csubjpass": 37,
     "remnant": 38,
-    "vocative": 39
+    "vocative": 39,
+    "<WORD>": 40
 }
