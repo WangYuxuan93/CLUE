@@ -203,9 +203,12 @@ def align_flatten_heads(
                             elif w in wist_dict:
                                 #print ("wist_dict:", wist_dict[w])
                                 w_heads, w_rels = wist_dict[w]
-                                word_root = w_heads.index(0)
-                                #print ("word_root:", word_root)
-                                token_head_id = head_ids[word_root]
+                                if len(w_heads) == len(head_ids):
+                                    word_root = w_heads.index(0)
+                                    #print ("word_root:", word_root)
+                                    token_head_id = head_ids[word_root]
+                                else:
+                                    token_head_id = head_ids[0]
                             else:
                                 token_head_id = head_ids[0]
                         else:
@@ -249,13 +252,19 @@ def align_flatten_heads(
                             if debug:
                                 print ("wist_dict:", wist_dict[w])
                             w_heads, w_rels = wist_dict[w]
-                            assert len(w_heads) == len(tids)
-                            #word_root = w_heads.index(0)
-                            for j, cid in enumerate(tids):
-                                if w_heads[j] == 0: continue
-                                head_id = tids[w_heads[j]-1]
-                                heads[cid][head_id] = 1
-                                rels[cid][head_id] = syntax_label_map["<WORD>"]
+                            if len(w_heads) == len(tids):
+                                #word_root = w_heads.index(0)
+                                for j, cid in enumerate(tids):
+                                    if w_heads[j] == 0: continue
+                                    head_id = tids[w_heads[j]-1]
+                                    heads[cid][head_id] = 1
+                                    rels[cid][head_id] = syntax_label_map["<WORD>"]
+                            else:
+                                root_id = tids[0]
+                                for cid in tids:
+                                    if cid == root_id: continue
+                                    heads[cid][root_id] = 1
+                                    rels[cid][root_id] = syntax_label_map["<WORD>"]
                         else:
                             root_id = tids[0]
                             for cid in tids:
@@ -360,9 +369,12 @@ def align_flatten_heads_diff(
                             elif w in wist_dict:
                                 #print ("wist_dict:", wist_dict[w])
                                 w_heads, w_rels = wist_dict[w]
-                                word_root = w_heads.index(0)
-                                #print ("word_root:", word_root)
-                                token_head_id = head_ids[word_root]
+                                if len(w_heads) == len(head_ids):
+                                    word_root = w_heads.index(0)
+                                    #print ("word_root:", word_root)
+                                    token_head_id = head_ids[word_root]
+                                else:
+                                    token_head_id = head_ids[0]
                             else:
                                 token_head_id = head_ids[0]
                         else:
@@ -402,13 +414,19 @@ def align_flatten_heads_diff(
                             if debug:
                                 print ("wist_dict:", wist_dict[w])
                             w_heads, w_rels = wist_dict[w]
-                            assert len(w_heads) == len(tids)
-                            #word_root = w_heads.index(0)
-                            for j, cid in enumerate(tids):
-                                if w_heads[j] == 0: continue
-                                head_id = tids[w_heads[j]-1]
-                                heads[cid][head_id] = 1
-                                rels[cid][head_id] = syntax_label_map["<WORD>"]
+                            if len(w_heads) == len(tids):
+                                #word_root = w_heads.index(0)
+                                for j, cid in enumerate(tids):
+                                    if w_heads[j] == 0: continue
+                                    head_id = tids[w_heads[j]-1]
+                                    heads[cid][head_id] = 1
+                                    rels[cid][head_id] = syntax_label_map["<WORD>"]
+                            else:
+                                root_id = tids[0]
+                                for cid in tids:
+                                    if cid == root_id: continue
+                                    heads[cid][root_id] = 1
+                                    rels[cid][root_id] = syntax_label_map["<WORD>"]
                         else:
                             root_id = tids[0]
                             for cid in tids:
