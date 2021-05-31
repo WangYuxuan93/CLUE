@@ -248,11 +248,11 @@ def align_flatten_heads(
                         if debug:
                             print ("word:", w)
                         if w in wist_dict:
-                            n_wist_word += 1
                             if debug:
                                 print ("wist_dict:", wist_dict[w])
                             w_heads, w_rels = wist_dict[w]
                             if len(w_heads) == len(tids):
+                                n_wist_word += 1
                                 #word_root = w_heads.index(0)
                                 for j, cid in enumerate(tids):
                                     if w_heads[j] == 0: continue
