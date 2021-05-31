@@ -9,6 +9,7 @@ from .utils import DataProcessor
 from processors.processor import cached_features_filename
 from .mappings.conll09_srl_pipeline_mapping import conll09_chinese_syntax_label_mapping, conll09_english_syntax_label_mapping
 from .mappings.upb_srl_pipeline_mapping import upb_chinese_syntax_label_mapping
+from .mappings.wist import wist_dict
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ def align_flatten_heads(
         max_length=128,
         syntax_label_map=None,
         expand_type="word",
+        words_list=None,
         debug=False
     ):
         #print ("attention_mask:\n", attention_mask)
@@ -166,6 +168,7 @@ def align_flatten_heads(
         #print ("lengths:\n", lengths)
         #print ("word_ids:\n", word_ids)
         wid2tid_list = get_word2token_map(word_ids, lengths)
+        n_tot_word, n_wist_word, n_single_word = 0, 0, 0
 
         heads_list = []
         rels_list = []
@@ -189,8 +192,27 @@ def align_flatten_heads(
                     # head_id do not need since it is already 1 greater
                     head_id = head_id
                     head_ids = wid2tid[head_id]
-                    # get the first token of the head word
-                    token_head_id = head_ids[0]
+                    if "wist" in expand_type:
+                        words = words_list[i]
+                        real_head_id = head_id - 1 if head_id > 0 else 0
+                        if real_head_id < len(words):
+                            w = words[real_head_id]
+                            #print ("word:", w)
+                            if len(head_ids) == 1:
+                                token_head_id = head_ids[0]
+                            elif w in wist_dict:
+                                #print ("wist_dict:", wist_dict[w])
+                                w_heads, w_rels = wist_dict[w]
+                                word_root = w_heads.index(0)
+                                #print ("word_root:", word_root)
+                                token_head_id = head_ids[word_root]
+                            else:
+                                token_head_id = head_ids[0]
+                        else:
+                            token_head_id = head_ids[0]
+                    else:
+                        # get the first token of the head word
+                        token_head_id = head_ids[0]
                     child_ids = wid2tid[child_id]
                     for child_id in child_ids:
                         # ignore out of range arcs
@@ -202,14 +224,56 @@ def align_flatten_heads(
                 print ("heads:\n", heads)
                 print ("rels:\n", rels)
 
-            if "word" in expand_type:
+            if "wist" in expand_type:
+                # add arc with word_label following dep defined in WIST, if not included, still use word
+                words = words_list[i]
+                for wid, tids in enumerate(wid2tid):
+                    n_tot_word += 1
+                    if len(tids) == 1:
+                        n_single_word += 1
+                    if len(tids) > 1:
+                        real_wid = wid-1 if wid > 0 else 0
+                        # this is for arg where current predicate has no word
+                        if real_wid >= len(words):
+                            root_id = tids[0]
+                            for cid in tids:
+                                if cid == root_id: continue
+                                heads[cid][root_id] = 1
+                                rels[cid][root_id] = syntax_label_map["<WORD>"]
+                            continue
+                        w = words[real_wid]
+                        if debug:
+                            print ("word:", w)
+                        if w in wist_dict:
+                            n_wist_word += 1
+                            if debug:
+                                print ("wist_dict:", wist_dict[w])
+                            w_heads, w_rels = wist_dict[w]
+                            assert len(w_heads) == len(tids)
+                            #word_root = w_heads.index(0)
+                            for j, cid in enumerate(tids):
+                                if w_heads[j] == 0: continue
+                                head_id = tids[w_heads[j]-1]
+                                heads[cid][head_id] = 1
+                                rels[cid][head_id] = syntax_label_map["<WORD>"]
+                        else:
+                            root_id = tids[0]
+                            for cid in tids:
+                                if cid == root_id: continue
+                                heads[cid][root_id] = 1
+                                rels[cid][root_id] = syntax_label_map["<WORD>"]
+                if debug:
+                    print ("heads (wist arc):\n", heads)
+                    print ("rels (wist arc):\n", rels)
+                    #exit()
+            elif "word" in expand_type:
                 # add arc with word_label from following chars to the first char of each word
                 for tids in wid2tid:
                     if len(tids) > 1:
-                        start_id = tids[0]
+                        root_id = tids[0]
                         for cid in tids[1:]:
-                            heads[cid][start_id] = 1
-                            rels[cid][start_id] = syntax_label_map["<WORD>"]
+                            heads[cid][root_id] = 1
+                            rels[cid][root_id] = syntax_label_map["<WORD>"]
                 if debug:
                     print ("heads (word arc):\n", heads)
                     print ("rels (word arc):\n", rels)
@@ -229,6 +293,10 @@ def align_flatten_heads(
             print ("rels:\n", rels)
             exit()
 
+        if "wist" in expand_type:
+            logger.info("Words total={}, single={}, wist={} ({:.2f}%)".format(n_tot_word, n_single_word, 
+                                        n_wist_word, 100*float(n_wist_word)/(n_tot_word- n_single_word)))
+
         return heads, rels
 
 
@@ -243,6 +311,7 @@ def align_flatten_heads_diff(
         syntax_label_map=None,
         expand_type="word",
         align_type="diff",
+        words_list=None,
         debug=False
     ):
         #print ("attention_mask:\n", attention_mask)
@@ -279,8 +348,28 @@ def align_flatten_heads_diff(
                     child_id = child_id + 1
                     # head_id do not need +1 since it is already 1 greater
                     head_ids = wid2tid[head_id]
-                    # get the first token of the head word
-                    token_head_id = head_ids[0]
+
+                    if "wist" in expand_type:
+                        words = words_list[i]
+                        real_head_id = head_id - 1 if head_id > 0 else 0
+                        if real_head_id < len(words):
+                            w = words[real_head_id]
+                            #print ("word:", w)
+                            if len(head_ids) == 1:
+                                token_head_id = head_ids[0]
+                            elif w in wist_dict:
+                                #print ("wist_dict:", wist_dict[w])
+                                w_heads, w_rels = wist_dict[w]
+                                word_root = w_heads.index(0)
+                                #print ("word_root:", word_root)
+                                token_head_id = head_ids[word_root]
+                            else:
+                                token_head_id = head_ids[0]
+                        else:
+                            token_head_id = head_ids[0]
+                    else:
+                        # get the first token of the head word
+                        token_head_id = head_ids[0]
                     child_ids = wid2tid[child_id]
                     for child_id in child_ids:
                         # ignore out of range arcs
@@ -292,7 +381,45 @@ def align_flatten_heads_diff(
                 print ("heads:\n", heads)
                 print ("rels:\n", rels)
 
-            if "word" in expand_type:
+            if "wist" in expand_type:
+                # add arc with word_label following dep defined in WIST, if not included, still use word
+                words = words_list[i]
+                for wid, tids in enumerate(wid2tid):
+                    if len(tids) > 1:
+                        real_wid = wid-1 if wid > 0 else 0
+                        # this is for arg where current predicate has no word
+                        if real_wid >= len(words):
+                            root_id = tids[0]
+                            for cid in tids:
+                                if cid == root_id: continue
+                                heads[cid][root_id] = 1
+                                rels[cid][root_id] = syntax_label_map["<WORD>"]
+                            continue
+                        w = words[real_wid]
+                        if debug:
+                            print ("word:", w)
+                        if w in wist_dict:
+                            if debug:
+                                print ("wist_dict:", wist_dict[w])
+                            w_heads, w_rels = wist_dict[w]
+                            assert len(w_heads) == len(tids)
+                            #word_root = w_heads.index(0)
+                            for j, cid in enumerate(tids):
+                                if w_heads[j] == 0: continue
+                                head_id = tids[w_heads[j]-1]
+                                heads[cid][head_id] = 1
+                                rels[cid][head_id] = syntax_label_map["<WORD>"]
+                        else:
+                            root_id = tids[0]
+                            for cid in tids:
+                                if cid == root_id: continue
+                                heads[cid][root_id] = 1
+                                rels[cid][root_id] = syntax_label_map["<WORD>"]
+                if debug:
+                    print ("heads (wist arc):\n", heads)
+                    print ("rels (wist arc):\n", rels)
+                    #exit()
+            elif "word" in expand_type:
                 # add arc with word_label from following chars to the first char of each word
                 for tids in wid2tid:
                     if len(tids) > 1:

@@ -338,6 +338,7 @@ def convert_parsed_examples_to_features(
                             max_length=max_length,
                             syntax_label_map=processor.get_syntax_label_map(),
                             expand_type=expand_type,
+                            words_list=[example.tokens_a for example in examples]
                         )
         elif official_syntax_type == "pred":
             heads, rels = align_flatten_heads(
@@ -348,6 +349,7 @@ def convert_parsed_examples_to_features(
                             max_length=max_length,
                             syntax_label_map=processor.get_syntax_label_map(),
                             expand_type=expand_type,
+                            words_list=[example.tokens_a for example in examples]
                         )
         elif official_syntax_type == "diff":
             heads, rels = align_flatten_heads_diff(

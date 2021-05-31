@@ -436,7 +436,7 @@ def main():
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
     parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
     parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp"], help="Type of the parser")
-    parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word","copy-word"], help="Policy to expand parses")
+    parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word","copy-word","wist","copy-wist"], help="Policy to expand parses")
     parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","pkuseg","rule"], help="Policy to align subwords in parser")
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
     parser.add_argument("--parser_compute_dist", action='store_true', help="Whether parser should also compute distance matrix")

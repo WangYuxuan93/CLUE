@@ -12,6 +12,7 @@ from .mappings.upb_srl_end2end_mapping import upb_chinese_end2end_mapping, upb_c
 from processors.processor import cached_features_filename
 from processors.srl_processor import InputConll09Example, SrlProcessor, align_flatten_heads
 from processors.srl_processor import prepare_word_level_input, flatten_heads_to_matrix
+from .mappings.wist import wist_dict
 
 from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
@@ -432,6 +433,7 @@ def convert_parsed_examples_to_features(
                             max_length=max_length,
                             syntax_label_map=processor.get_syntax_label_map(),
                             expand_type=expand_type,
+                            words_list=[example.words for example in examples]
                         )
         elif official_syntax_type == "pred":
             heads, rels = align_flatten_heads(
@@ -442,6 +444,7 @@ def convert_parsed_examples_to_features(
                             max_length=max_length,
                             syntax_label_map=processor.get_syntax_label_map(),
                             expand_type=expand_type,
+                            words_list=[example.words for example in examples]
                         )
         else:
             heads, rels = parser.parse_bpes(
