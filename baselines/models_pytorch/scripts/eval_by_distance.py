@@ -85,7 +85,13 @@ def eval_prf(gold_data, sys_data, type="sent", split=[10,20,30,40]):
     print ("Max len={}, {}={}, gold={}, pred={}, corr={}, P={:.4f}, R={:.4f}, F={:.4f}".format(
                     l, type, n_sent[l], n_gold[l], n_pred[l], n_corr[l], n_p[l], n_r[l], n_f[l]))
 
-  #print ("precision:", n_p)
+  tot_gold = sum(n_gold.values())
+  tot_pred = sum(n_pred.values())
+  tot_corr = sum(n_corr.values())
+  p = float(tot_corr) / tot_pred
+  r = float(tot_corr) / tot_gold
+  f = 2*p*r/(p+r)
+  print ("Overall P={:.4f}, R={:.4f}, F={:.4f}".format(p, r, f))
   #print ("recall:", n_r)
   #print ("f1:",n_f)
 
