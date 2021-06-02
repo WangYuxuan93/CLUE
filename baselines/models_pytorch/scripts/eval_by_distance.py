@@ -12,7 +12,10 @@ def load(filename, debug=False):
       #rels = [line[10] for line in sent]
       #pred_heads = [int(line[9]) for line in sent]
       #pred_rels = [line[11] for line in sent]
-      pred_senses = [line[13].split('.')[1] if line[13] != '_' and line[12] == 'Y' else '_' for line in sent]
+      try:
+        pred_senses = [line[13].split('.')[-1] if line[13] != '_' and line[12] == 'Y' else '_' for line in sent]
+      except:
+        print (line)
       pred_ids = []
       for j, line in enumerate(sent):
         if line[12] == 'Y':

@@ -12,7 +12,7 @@ def load(filename, debug=False):
       #rels = [line[10] for line in sent]
       #pred_heads = [int(line[9]) for line in sent]
       #pred_rels = [line[11] for line in sent]
-      pred_senses = [line[13].split('.')[1] if line[13] != '_' and line[12] == 'Y' else '_' for line in sent]
+      pred_senses = [line[13].split('.')[-1] if line[13] != '_' and line[12] == 'Y' else '_' for line in sent]
       pred_ids = []
       for j, line in enumerate(sent):
         if line[12] == 'Y':
@@ -57,6 +57,7 @@ def eval_prf(gold_data, sys_data):
   label_list = sorted(n_gold.items(), key=lambda x:x[1], reverse=True)
   print ("Label count in gold:", label_list)
   for tup in label_list:
+    if tup[1] < 10: break
     l = tup[0]
     n_p[l] = float(n_corr[l]) / n_pred[l] if n_pred[l] > 0 else 0
     n_r[l] = float(n_corr[l]) / n_gold[l] if n_gold[l] > 0 else 0
