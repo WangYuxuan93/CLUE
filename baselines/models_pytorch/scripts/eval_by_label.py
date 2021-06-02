@@ -71,7 +71,7 @@ def eval_prf(gold_data, sys_data):
   p = float(tot_corr) / tot_pred
   r = float(tot_corr) / tot_gold
   f = 2*p*r/(p+r)
-  print ("Overall P={:.4f}, R={:.4f}, F={:.4f}".format(p, r, f))
+  print ("Overall gold={}, pred={}, corr={}, P={:.4f}, R={:.4f}, F={:.4f}".format(tot_gold, tot_pred, tot_corr, p, r, f))
 
   #print ("precision:", n_p)
   #print ("recall:", n_r)

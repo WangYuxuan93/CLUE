@@ -91,7 +91,7 @@ def eval_prf(gold_data, sys_data, type="sent", split=[10,20,30,40]):
   p = float(tot_corr) / tot_pred
   r = float(tot_corr) / tot_gold
   f = 2*p*r/(p+r)
-  print ("Overall P={:.4f}, R={:.4f}, F={:.4f}".format(p, r, f))
+  print ("Overall gold={}, pred={}, corr={}, P={:.4f}, R={:.4f}, F={:.4f}".format(tot_gold, tot_pred, tot_corr, p, r, f))
   #print ("recall:", n_r)
   #print ("f1:",n_f)
 
@@ -104,7 +104,7 @@ parser.add_argument("--type", default="sent", type=str, choices=["sent","arc"],
 parser.add_argument("--splits", default="10:20:30:40", type=str, help="split interval")
 args = parser.parse_args()
 
-splits = [int(x) for x in args.splits.strip().split(':')]+[100]
+splits = [int(x) for x in args.splits.strip().split(':')]+[10000]
 gold_data = load(args.g)
 print ("gold sents:", len(gold_data))
 sys_data = load(args.s)
