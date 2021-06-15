@@ -10,6 +10,9 @@ from processors.argument_label_processor import ArgumentLabelProcessor
 from processors.argument_label_processor import convert_examples_to_features as arg_convert_examples_to_features
 from processors.argument_label_processor import convert_parsed_examples_to_features as arg_convert_parsed_examples_to_features
 
+from processors.argument_label_processor import ArgumentLabelProcessorSDP
+from processors.argument_label_processor import convert_parsed_examples_to_features_sdp as arg_convert_parsed_examples_to_features_sdp
+
 from processors.predicate_sense_processor import PredicateSenseProcessor
 from processors.predicate_sense_processor import convert_examples_to_features as sense_convert_examples_to_features
 from processors.predicate_sense_processor import convert_parsed_examples_to_features as sense_convert_parsed_examples_to_features
@@ -39,6 +42,19 @@ processors = {
     'sense': PredicateSenseProcessor, 
     'srl': SrlEnd2EndProcessor,
 }
+
+# for sdp as input
+processors_sdp = {
+    'arg': ArgumentLabelProcessorSDP,
+    #'sense': PredicateSenseProcessor, 
+    #'srl': SrlEnd2EndProcessor,
+}
+parsed_converters_sdp = {
+    'arg': arg_convert_parsed_examples_to_features_sdp,
+    #'sense': sense_convert_parsed_examples_to_features,
+    #'srl': srl_convert_parsed_examples_to_features,
+}
+
 
 def collate_fn(batch):
     """
@@ -105,7 +121,10 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
     task_type = task.split('-')[2]
-    processor = processors[task_type](task)
+    if args.official_syntax_type == "sdp":
+        processor = processors_sdp[task_type](task)
+    else:
+        processor = processors[task_type](task)
     #elif task_type == 'sense':
 
     output_mode = 'srl'
@@ -184,27 +203,31 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                                             pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
                                             )
         else:
-            features = parsed_converters[task_type](examples,
-                                                    tokenizer,
-                                                    biaffine_parser,
-                                                    task=args.task_name,
-                                                    label_list=label_list,
-                                                    is_word_level=args.is_word_level,
-                                                    max_length=args.max_seq_length,
-                                                    output_mode=output_mode,
-                                                    pad_on_left=bool(args.model_type in ['xlnet']),
-                                                    # pad on the left for xlnet
-                                                    pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-                                                    pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
-                                                    official_syntax_type=args.official_syntax_type,
-                                                    expand_type=args.parser_expand_type,
-                                                    align_type=args.parser_align_type,
-                                                    return_tensor=args.parser_return_tensor,
-                                                    compute_dist=args.parser_compute_dist,
-                                                    return_graph_mask=args.parser_return_graph_mask, 
-                                                    n_mask=args.parser_n_mask, 
-                                                    mask_types=args.parser_mask_types,
-                                                    )
+            if args.official_syntax_type == "sdp":
+                converter = parsed_converters_sdp[task_type]
+            else:
+                converter = parsed_converters[task_type]
+            features = converter(examples,
+                                tokenizer,
+                                biaffine_parser,
+                                task=args.task_name,
+                                label_list=label_list,
+                                is_word_level=args.is_word_level,
+                                max_length=args.max_seq_length,
+                                output_mode=output_mode,
+                                pad_on_left=bool(args.model_type in ['xlnet']),
+                                # pad on the left for xlnet
+                                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+                                pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
+                                official_syntax_type=args.official_syntax_type,
+                                expand_type=args.parser_expand_type,
+                                align_type=args.parser_align_type,
+                                return_tensor=args.parser_return_tensor,
+                                compute_dist=args.parser_compute_dist,
+                                return_graph_mask=args.parser_return_graph_mask, 
+                                n_mask=args.parser_n_mask, 
+                                mask_types=args.parser_mask_types,
+                                )
     
             del biaffine_parser
 

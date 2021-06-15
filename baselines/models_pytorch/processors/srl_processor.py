@@ -183,9 +183,9 @@ def align_flatten_heads(
             rels = torch.zeros(max_length, max_length, dtype=torch.long)
             wid2tid = wid2tid_list[i]
             if "copy" in expand_type:
-                head_ids = flatten_heads[i]
+                flatten_head_ids = flatten_heads[i]
                 # copy the arc from first char of the head to all chars consisting its children
-                for child_id, head_id in enumerate(head_ids):
+                for child_id, head_id in enumerate(flatten_head_ids):
                     label = flatten_rels[i][child_id]
                     # add the first [CLS] token
                     child_id = child_id + 1
@@ -344,10 +344,10 @@ def align_flatten_heads_diff(
             rels = torch.zeros(max_length, max_length, dtype=torch.long)
             wid2tid = wid2tid_list[i]
             if "copy" in expand_type:
-                head_ids = flatten_gold_heads[i]
+                flatten_head_ids = flatten_gold_heads[i]
                 pred_head_ids = flatten_pred_heads[i]
                 # copy the arc from first char of the head to all chars consisting its children
-                for child_id, head_id in enumerate(head_ids):
+                for child_id, head_id in enumerate(flatten_head_ids):
                     # only add arcs for those prediction is wrong
                     if align_type == "diff" and head_id == pred_head_ids[child_id]: continue
                     # only add arcs for those prediction is correct
@@ -467,6 +467,94 @@ def align_flatten_heads_diff(
         return heads, rels
 
 
+def align_flatten_heads_sdp(
+        attention_mask,
+        word_ids,
+        flatten_heads,
+        flatten_rels,
+        max_length=128,
+        syntax_label_map=None,
+        expand_type="word",
+        words_list=None,
+        debug=False
+    ):
+        #print ("attention_mask:\n", attention_mask)
+        lengths = [sum(mask) for mask in attention_mask]
+        #print ("lengths:\n", lengths)
+        #print ("word_ids:\n", word_ids)
+        wid2tid_list = get_word2token_map(word_ids, lengths)
+        n_tot_word, n_wist_word, n_single_word = 0, 0, 0
+
+        heads_list = []
+        rels_list = []
+        for i in range(len(flatten_heads)):
+            if debug:
+                print ("word_ids:\n", word_ids[i])
+                print ("wid2tid:\n", wid2tid_list[i])
+                print ("flatten_heads:\n", flatten_heads[i])
+                print ("flatten_rels:\n", flatten_rels[i])
+            
+            heads = torch.zeros(max_length, max_length, dtype=torch.long)
+            rels = torch.zeros(max_length, max_length, dtype=torch.long)
+            wid2tid = wid2tid_list[i]
+            if "copy" in expand_type:
+                flatten_head_ids = flatten_heads[i]
+                # copy the arc from first char of the head to all chars consisting its children
+                for child_id, head_ids in enumerate(flatten_head_ids):
+                    labels = flatten_rels[i][child_id]
+                    # add the first [CLS] token
+                    child_id = child_id + 1
+                    for head_id, label in zip(head_ids,labels):
+                        # head_id do not need since it is already 1 greater
+                        #head_id = head_id
+                        head_tids = wid2tid[head_id]
+                        # get the first token of the head word
+                        token_head_tid = head_tids[0]
+                        child_tids = wid2tid[child_id]
+                        for child_tid in child_tids:
+                            # ignore out of range arcs
+                            if child_tid < max_length and token_head_tid < max_length:
+                                heads[child_tid][token_head_tid] = 1
+                                rels[child_tid][token_head_tid] = syntax_label_map[label]
+            if debug:
+                torch.set_printoptions(profile="full")
+                print ("heads:\n", heads)
+                print ("rels:\n", rels)
+
+            if "word" in expand_type:
+                # add arc with word_label from following chars to the first char of each word
+                for tids in wid2tid:
+                    if len(tids) > 1:
+                        root_id = tids[0]
+                        for cid in tids[1:]:
+                            heads[cid][root_id] = 1
+                            rels[cid][root_id] = syntax_label_map["<WORD>"]
+                if debug:
+                    print ("heads (word arc):\n", heads)
+                    print ("rels (word arc):\n", rels)
+                    #exit()
+
+            heads_list.append(heads.to_sparse())
+            rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
+
+        heads = torch.stack(heads_list, dim=0)
+        rels = torch.stack(rels_list, dim=0)
+
+        if debug:
+            print ("heads:\n", heads)
+            print ("rels:\n", rels)
+            exit()
+
+        if "wist" in expand_type:
+            logger.info("Words total={}, single={}, wist={} ({:.2f}%)".format(n_tot_word, n_single_word, 
+                                        n_wist_word, 100*float(n_wist_word)/(n_tot_word- n_single_word)))
+
+        return heads, rels
+
+
 def flatten_heads_to_matrix(
         word_masks,
         flatten_heads,
@@ -496,6 +584,58 @@ def flatten_heads_to_matrix(
                 label = flatten_rels[i][child_id]
                 heads[child_id][head_id] = 1
                 rels[child_id][head_id] = syntax_label_map[label]
+            
+            if debug:
+                torch.set_printoptions(profile="full")
+                print ("heads:\n", heads)
+                print ("rels:\n", rels)
+            heads_list.append(heads.to_sparse())
+            rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
+
+        heads = torch.stack(heads_list, dim=0)
+        rels = torch.stack(rels_list, dim=0)
+
+        if debug:
+            print ("heads:\n", heads)
+            print ("rels:\n", rels)
+            exit()
+
+        return heads, rels
+
+
+def flatten_heads_to_matrix_sdp(
+        word_masks,
+        flatten_heads,
+        flatten_rels,
+        syntax_label_map=None,
+        debug=False
+    ):
+        lengths = [sum(mask) for mask in word_masks]
+        max_word_len = max(lengths)
+
+        heads_list = []
+        rels_list = []
+        for i in range(len(flatten_heads)):
+            if debug:
+                print ("flatten_heads:\n", flatten_heads[i])
+                print ("flatten_rels:\n", flatten_rels[i])
+            
+            heads = torch.zeros(max_word_len, max_word_len, dtype=torch.long)
+            rels = torch.zeros(max_word_len, max_word_len, dtype=torch.long)
+
+            flatten_head_ids = flatten_heads[i]
+            # copy the arc from first char of the head to all chars consisting its children
+            for child_id, head_ids in enumerate(flatten_head_ids):
+                labels = flatten_rels[i][child_id]
+                for head_id, label in zip(head_ids,labels):
+                    # omitt root arc
+                    if head_id == 0: continue
+                    head_id -= 1
+                    heads[child_id][head_id] = 1
+                    rels[child_id][head_id] = syntax_label_map[label]
             
             if debug:
                 torch.set_printoptions(profile="full")
