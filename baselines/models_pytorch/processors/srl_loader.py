@@ -17,6 +17,9 @@ from processors.predicate_sense_processor import PredicateSenseProcessor
 from processors.predicate_sense_processor import convert_examples_to_features as sense_convert_examples_to_features
 from processors.predicate_sense_processor import convert_parsed_examples_to_features as sense_convert_parsed_examples_to_features
 
+from processors.predicate_sense_processor import PredicateSenseProcessorSDP
+from processors.predicate_sense_processor import convert_parsed_examples_to_features_sdp as sense_convert_parsed_examples_to_features_sdp
+
 from processors.srl_end2end_processor import SrlEnd2EndProcessor
 from processors.srl_end2end_processor import convert_examples_to_features as srl_convert_examples_to_features
 from processors.srl_end2end_processor import convert_parsed_examples_to_features as srl_convert_parsed_examples_to_features
@@ -46,12 +49,12 @@ processors = {
 # for sdp as input
 processors_sdp = {
     'arg': ArgumentLabelProcessorSDP,
-    #'sense': PredicateSenseProcessor, 
+    'sense': PredicateSenseProcessorSDP, 
     #'srl': SrlEnd2EndProcessor,
 }
 parsed_converters_sdp = {
     'arg': arg_convert_parsed_examples_to_features_sdp,
-    #'sense': sense_convert_parsed_examples_to_features,
+    'sense': sense_convert_parsed_examples_to_features_sdp,
     #'srl': srl_convert_parsed_examples_to_features,
 }
 
