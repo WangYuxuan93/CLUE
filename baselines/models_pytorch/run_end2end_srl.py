@@ -459,7 +459,7 @@ def main():
     parser.add_argument("--optim", default="AdamW", type=str, choices=["BERTAdam","AdamW"], help="Optimizer")
     ## SBERT parameters
     #parser.add_argument("--use_gold_syntax", action='store_true', help="Whether to use gold syntax tree")
-    parser.add_argument("--official_syntax_type", default=None, type=str, choices=[None, "gold", "pred", "diff", "same"], help="Type of the official syntax used")
+    parser.add_argument("--official_syntax_type", default=None, type=str, choices=[None, "gold", "pred", "diff", "same", "sdp"], help="Type of the official syntax used")
     parser.add_argument("--is_word_level", action='store_true', help="Whether use label/heads in word level")
     parser.add_argument("--use_bilstm", action='store_true', help="Whether use bilstm as encoder")
     parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
