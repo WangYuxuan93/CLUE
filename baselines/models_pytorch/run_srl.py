@@ -107,6 +107,12 @@ def _prepare_inputs(inputs, device, use_dist=False, debug=False):
         del inputs["rels"]
         del inputs["dists"]
 
+    if "extra_heads" in inputs and inputs["extra_heads"] is not None:
+        inputs["heads"] = [inputs["heads"], inputs["extra_heads"].float()]
+        inputs["rels"] = [inputs["rels"], inputs["extra_rels"]]
+    del inputs["extra_heads"]
+    del inputs["extra_rels"]
+
     return inputs
 
 def delete_old_checkpoints(output_dir, best_checkpoint, save_limit=1):
@@ -430,7 +436,7 @@ def main():
     parser.add_argument("--optim", default="AdamW", type=str, choices=["BERTAdam","AdamW"], help="Optimizer")
     ## SBERT parameters
     #parser.add_argument("--use_gold_syntax", action='store_true', help="Whether to use gold syntax tree")
-    parser.add_argument("--official_syntax_type", default=None, type=str, choices=[None, "gold", "pred", "diff", "same","sdp"], help="Type of the official syntax used")
+    parser.add_argument("--official_syntax_type", default=None, type=str, choices=[None, "gold", "pred", "diff", "same","sdp","sdp-pred"], help="Type of the official syntax used")
     parser.add_argument("--is_word_level", action='store_true', help="Whether use label/heads in word level")
     parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")

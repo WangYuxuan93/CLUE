@@ -66,10 +66,13 @@ def collate_fn(batch):
     """
     num_items = len(batch[0])
     all_heads, all_rels, all_dists = None, None, None
+    all_extra_heads, all_extra_rels = None, None
     if num_items == 7:
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask = map(torch.stack, zip(*batch))
     elif num_items == 9:
         all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 11:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, all_first_ids, all_word_mask, all_heads, all_rels, all_extra_heads, all_extra_rels = map(torch.stack, zip(*batch))
     max_len = max(all_attention_mask.sum(-1)).item()
     # save the original input_ids for max_head_len
     all_input_ids_ = all_input_ids[:, :max_len]
@@ -100,6 +103,26 @@ def collate_fn(batch):
         elif len(all_heads.size()) == 4:
             all_heads = all_heads[:, :, :head_max_len, :head_max_len]
         all_rels = all_rels[:, :head_max_len, :head_max_len]
+
+    if all_extra_heads is not None:
+        #print ("all_heads:", all_heads.size())
+        #print ("all_input_ids:", all_input_ids.size())
+        if list(all_extra_heads.size())[-1] == list(all_input_ids.size())[-1]:
+            # subword-level syntax matrix
+            head_max_len = max_len
+        else:
+            # word-level syntax matrix
+            head_max_len = max_word_len
+        #print ("max={}, max_word={}, max_head={}".format(max_len, max_word_len, head_max_len))
+        if all_extra_heads.is_sparse:
+            all_extra_heads = all_extra_heads.to_dense()
+            all_extra_rels = all_extra_rels.to_dense()
+        if len(all_extra_heads.size()) == 3:
+            all_extra_heads = all_extra_heads[:, :head_max_len, :head_max_len]
+        elif len(all_extra_heads.size()) == 4:
+            all_extra_heads = all_extra_heads[:, :, :head_max_len, :head_max_len]
+        all_extra_rels = all_extra_rels[:, :head_max_len, :head_max_len]
+
     if all_dists is not None:
         if all_dists.is_sparse:
             all_dists = all_dists.to_dense()
@@ -113,6 +136,8 @@ def collate_fn(batch):
     batch["labels"] = all_labels
     batch["heads"] = all_heads
     batch["rels"] = all_rels
+    batch["extra_heads"] = all_extra_heads
+    batch["extra_rels"] = all_extra_rels
     batch["first_ids"] = all_first_ids
     batch["word_mask"] = all_word_mask
     batch["dists"] = all_dists
@@ -124,7 +149,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
     task_type = task.split('-')[2]
-    if args.official_syntax_type == "sdp":
+    if args.official_syntax_type in ["sdp", "sdp-pred"]:
         processor = processors_sdp[task_type](task)
     else:
         processor = processors[task_type](task)
@@ -206,7 +231,7 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
                                             pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
                                             )
         else:
-            if args.official_syntax_type == "sdp":
+            if args.official_syntax_type in ["sdp", "sdp-pred"]:
                 converter = parsed_converters_sdp[task_type]
             else:
                 converter = parsed_converters[task_type]
@@ -256,8 +281,11 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     else:
         all_heads = torch.stack([f.heads for f in features])
         all_rels = torch.stack([f.rels for f in features])
+        if args.official_syntax_type == "sdp-pred":
+            all_extra_heads = torch.stack([f.extra_heads for f in features])
+            all_extra_rels = torch.stack([f.extra_rels for f in features])
         dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
-                                all_first_ids, all_word_mask, all_heads, all_rels)
+                                all_first_ids, all_word_mask, all_heads, all_rels, all_extra_heads, all_extra_rels)
 
 
     if return_examples:
