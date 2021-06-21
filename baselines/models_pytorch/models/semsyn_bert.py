@@ -184,6 +184,8 @@ class PalGNNLayer(nn.Module):
             self.attention = PalBertSelfAttention(config)
         elif self.encoder_type == "LIN": # linear 
             self.attention = None
+        elif self.encoder_type == "GAT2-ADD":
+            self.attention = nn.ModuleList([GATLayer(config), GATLayer(config)])
 
         if self.use_output_layer:
             self.attention_output = BertSelfOutput(config)
@@ -212,6 +214,10 @@ class PalGNNLayer(nn.Module):
         elif self.encoder_type == "LIN":
             # for linear we add act in between
             attention_hiddens = self.hidden_act_fn(input_tensor)
+        elif self.encoder_type == "GAT2-ADD":
+            attention_hiddens0 = self.attention[0](input_tensor, attention_mask, heads=heads[0], rels=rels[0])
+            attention_hiddens1 = self.attention[1](input_tensor, attention_mask, heads=heads[1], rels=rels[1])
+            attention_hiddens = attention_hiddens0 + attention_hiddens1
         
         attention_hiddens = self.dense_up(attention_hiddens) if self.do_pal_project else attention_hiddens
         if self.encoder_type != "LIN":
@@ -354,7 +360,7 @@ class SemSynBertEncoder(nn.Module):
                                                     self.config.graph["num_layers"] if self.fusion_type=="top" else "N/A",
                                                     self.structured_layers if self.fusion_type!="top" else "N/A"))
         logger.info("lowrank_size = {} (hidden = {}), num_attention_heads = {}".format(self.config.graph["lowrank_size"] if self.config.graph["do_pal_project"] else "N/A",
-                                                self.config.hidden_size, self.config.graph["num_attention_heads"] if self.graph_encoder in ["GAT","ATT"] else "N/A"))
+                                                self.config.hidden_size, self.config.graph["num_attention_heads"] if self.graph_encoder in ["GAT","GAT2-ADD","ATT"] else "N/A"))
         logger.info("data_flow_gate = {}".format(self.config.graph["data_flow_gate"] if self.config.graph["use_data_flow_gate"] 
                                                     and self.graph_encoder=="GCN" else "N/A"))
         logger.info("fusion_gate = {} (const = {})".format(self.config.graph["fusion_gate"] if self.config.graph["use_fusion_gate"] and self.fusion_type!="top" else "N/A",
@@ -394,16 +400,33 @@ class SemSynBertEncoder(nn.Module):
             rels = self.rel_dropout(rels)
 
         # convert heads to mask like format
-        if self.fusion_type in ["top","residual","inter"] and self.graph_encoder == "GAT":
-            if self.data_flow == "c2h":
-                heads = heads.permute(0, 2, 1)
-            elif self.data_flow == "bidir":
-                heads = heads + heads.permute(0, 2, 1)
-                # deal with entries == 2
-                heads = torch.where(heads>0, torch.ones_like(heads), torch.zeros_like(heads))
-            # (batch, 1, seq_len, seq_len), valid arc = 0, invalid arc = -10000.0
-            heads = heads.unsqueeze(1)
-            heads = (1.0 - heads) * -10000.0
+        if self.fusion_type in ["top","residual","inter"] and self.graph_encoder in ["GAT", "GAT2-ADD"]:
+            if self.graph_encoder == "GAT":
+                if self.data_flow == "c2h":
+                    heads = heads.permute(0, 2, 1)
+                elif self.data_flow == "bidir":
+                    heads = heads + heads.permute(0, 2, 1)
+                    # deal with entries == 2
+                    heads = torch.where(heads>0, torch.ones_like(heads), torch.zeros_like(heads))
+                # (batch, 1, seq_len, seq_len), valid arc = 0, invalid arc = -10000.0
+                heads = heads.unsqueeze(1)
+                heads = (1.0 - heads) * -10000.0
+            elif self.graph_encoder == "GAT2-ADD":
+                assert len(heads) == 2
+                # convert two heads
+                heads_list = []
+                for heads_ in heads:
+                    if self.data_flow == "c2h":
+                        heads_ = heads_.permute(0, 2, 1)
+                    elif self.data_flow == "bidir":
+                        heads_ = heads_ + heads_.permute(0, 2, 1)
+                        # deal with entries == 2
+                        heads_ = torch.where(heads_>0, torch.ones_like(heads_), torch.zeros_like(heads_))
+                    # (batch, 1, seq_len, seq_len), valid arc = 0, invalid arc = -10000.0
+                    heads_ = heads_.unsqueeze(1)
+                    heads_ = (1.0 - heads_) * -10000.0
+                    heads_list.append(heads_)
+                heads = heads_list
 
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
@@ -554,8 +577,12 @@ class SemSynBertModel(BertPreTrainedModel):
             - 1 for tokens that are **not masked**,
             - 0 for tokens that are **masked**.
         """
-        heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
-        rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
+        if isinstance(heads, list):
+            heads = [h.to_dense() if h is not None and h.is_sparse else h for h in heads]
+            rels = [r.to_dense() if r is not None and r.is_sparse else r for r in rels]
+        else:
+            heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
+            rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -672,8 +699,8 @@ class SemSynBertForSequenceClassification(BertPreTrainedModel):
             If :obj:`config.num_labels == 1` a regression loss is computed (Mean-Square loss),
             If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
-        rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
+        #heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
+        #rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.bert(
@@ -752,8 +779,8 @@ class SemSynBertForMultipleChoice(BertPreTrainedModel):
             else None
         )
 
-        heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
-        rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
+        #heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
+        #rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
         if heads is not None:
             if len(heads.size()) == 4:
                 #   (batch, n_choices, seq_len, seq_len)
@@ -836,8 +863,8 @@ class SemSynBertForQuestionAnswering(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
-        rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
+        #heads = heads.to_dense() if heads is not None and heads.is_sparse else heads
+        #rels = rels.to_dense() if rels is not None and rels.is_sparse else rels
         
         outputs = self.bert(
             input_ids,
