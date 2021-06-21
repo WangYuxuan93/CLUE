@@ -466,10 +466,14 @@ class ArgumentLabelProcessorSDP(ArgumentLabelProcessor):
             for line in sent:
                 sdp = line[9].split('|')
                 s_heads, s_rels = [], []
-                for item in sdp:
-                    h, r = item.split(':')
-                    s_heads.append(int(h))
-                    s_rels.append(r)
+                try:
+                    for item in sdp:
+                        h, r = item.split(':')
+                        s_heads.append(int(h))
+                        s_rels.append(r)
+                except:
+                    print ("line:\n", line)
+                    print ("sdp:\n", sdp)
                 sdp_heads.append(s_heads)
                 sdp_rels.append(s_rels)
 
