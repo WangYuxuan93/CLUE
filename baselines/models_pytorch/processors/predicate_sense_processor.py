@@ -8,6 +8,7 @@ from torch.utils.data import TensorDataset
 from .utils import DataProcessor
 from .mappings.conll09_srl_pipeline_mapping import conll09_chinese_sense_mapping, conll09_english_sense_mapping
 from .mappings.upb_srl_pipeline_mapping import upb_chinese_sense_mapping
+from .mappings.conll09_srl_pipeline_mapping import conll09_chinese_syntax_label_mapping
 from processors.processor import cached_features_filename
 from processors.srl_processor import SrlProcessor, align_flatten_heads
 from processors.srl_processor import prepare_word_level_input, flatten_heads_to_matrix
@@ -62,6 +63,37 @@ class InputParsedPredicateSenseFeatures(object):
         self.label_ids = label_ids
         self.heads = heads
         self.rels = rels
+        self.word_mask = word_mask
+        self.first_ids = first_ids
+        self.dists = dists
+
+class InputSemSynPredicateSenseFeatures(object):
+    """A single set of features of data."""
+
+    def __init__(
+            self, 
+            input_ids, 
+            attention_mask, 
+            token_type_ids, 
+            predicate_mask, 
+            label_ids, 
+            heads, 
+            rels,
+            extra_heads,
+            extra_rels,
+            word_mask=None,
+            first_ids=None,
+            dists=None
+        ):
+        self.input_ids = input_ids
+        self.attention_mask = attention_mask
+        self.token_type_ids = token_type_ids
+        self.predicate_mask = predicate_mask
+        self.label_ids = label_ids
+        self.heads = heads
+        self.rels = rels
+        self.extra_heads = extra_heads
+        self.extra_rels = extra_rels
         self.word_mask = word_mask
         self.first_ids = first_ids
         self.dists = dists
@@ -469,6 +501,19 @@ def convert_parsed_examples_to_features_sdp(
                         expand_type=expand_type,
                         words_list=[example.words for example in examples],
                     )
+        if official_syntax_type == "sdp-pred":
+            # Notice: here the pred syntax in in gold syntax's place !
+            syn_heads, syn_rels = align_flatten_heads(
+                            attention_mask=tokenized_inputs['attention_mask'],
+                            word_ids=[tokenized_inputs.word_ids(i) for i in range(len(examples))],
+                            flatten_heads=[example.gold_heads for example in examples],
+                            flatten_rels=[example.gold_rels for example in examples],
+                            max_length=max_length,
+                            syntax_label_map=conll09_chinese_syntax_label_mapping,
+                            expand_type=expand_type,
+                            words_list=[example.words for example in examples]
+                        )
+
 
     max_word_len = max(word_lens)
     for (ex_index, example) in enumerate(examples):
@@ -501,15 +546,33 @@ def convert_parsed_examples_to_features_sdp(
             torch.set_printoptions(profile="full")
             print ("\nheads:\n", heads[ex_index])
             print ("\nrels:\n", rels[ex_index])
+            if official_syntax_type == "sdp-pred":
+                print ("\nextra_heads:\n", syn_heads[ex_index])
+                print ("\nextra_rels:\n", syn_rels[ex_index])
 
-        features.append(
-            InputParsedPredicateSenseFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                          attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                          token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                          predicate_mask=predicate_mask,
-                          label_ids=label_ids,
-                          heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
-                          rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
-                          word_mask=word_masks[ex_index],
-                          first_ids=first_ids_list[ex_index]))
+        if official_syntax_type == "sdp":
+            features.append(
+                InputParsedPredicateSenseFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                              predicate_mask=predicate_mask,
+                              label_ids=label_ids,
+                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
+                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
+                              word_mask=word_masks[ex_index],
+                              first_ids=first_ids_list[ex_index]))
+        elif official_syntax_type == "sdp-pred":
+            features.append(
+                InputSemSynPredicateSenseFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                              predicate_mask=predicate_mask,
+                              label_ids=label_ids,
+                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
+                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
+                              extra_heads=syn_heads[ex_index] if syn_heads.is_sparse else syn_heads[ex_index].to_sparse(),
+                              extra_rels=syn_rels[ex_index] if syn_rels.is_sparse else syn_rels[ex_index].to_sparse(),
+                              word_mask=word_masks[ex_index],
+                              first_ids=first_ids_list[ex_index]))
+
     return features
