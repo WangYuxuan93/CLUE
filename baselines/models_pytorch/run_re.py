@@ -497,6 +497,7 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
     args = parser.parse_args()
 
+    args.data_dir = os.path.join(args.data_dir, args.task_name.lower())
     args.parser_mask_types = args.parser_mask_types.split(":")
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
