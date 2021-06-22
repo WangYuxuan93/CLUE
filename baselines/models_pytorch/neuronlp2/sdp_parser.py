@@ -413,6 +413,107 @@ def generate_syntax_masks_with_parser(parsing_result, attention_mask, n_mask, to
     return attention_mask
 
 
+def get_word2token_map(word_ids, lengths, debug=False):
+    assert len(word_ids) == len(lengths)
+    wid2tid_list = []
+    for wids, l in zip(word_ids, lengths):
+        wid2tid = []
+        prev_word = None
+        for i, w in enumerate(wids):
+            if i >= l: break
+            if len(wid2tid) == 0 or w != prev_word:
+                wid2tid.append([i])
+                prev_word = w
+            elif w == None: # this is for consecutive None ([SEP] tokens), such as in en-roberta
+                wid2tid.append([i])
+            else:
+                wid2tid[-1].append(i)
+        wid2tid_list.append(wid2tid)
+        if debug:
+            print ("wids:\n", wids)
+            print ("wid2tid:\n", wid2tid)
+    return wid2tid_list
+
+
+def word_level_to_subword_level_heads(
+        attention_mask,
+        word_ids,
+        wl_heads,
+        wl_rels,
+        max_length=128,
+        expand_type="word",
+        words_list=None,
+        word_label_id=200,
+        debug=False
+    ):
+        #print ("attention_mask:\n", attention_mask)
+        lengths = [sum(mask) for mask in attention_mask]
+        #print ("lengths:\n", lengths)
+        #print ("word_ids:\n", word_ids)
+        wid2tid_list = get_word2token_map(word_ids, lengths)
+        n_tot_word, n_wist_word, n_single_word = 0, 0, 0
+
+        heads_list = []
+        rels_list = []
+        for i in range(len(wl_heads)):
+            if debug:
+                print ("word_ids:\n", word_ids[i])
+                print ("wid2tid:\n", wid2tid_list[i])
+                print ("wl_heads:\n", wl_heads[i])
+                print ("wl_rels:\n", wl_rels[i])
+            
+            heads = torch.zeros(max_length, max_length, dtype=torch.long)
+            rels = torch.zeros(max_length, max_length, dtype=torch.long)
+            wid2tid = wid2tid_list[i]
+            if "copy" in expand_type:
+                arc_indices = torch.nonzero(wl_heads[i], as_tuple=False).detach().cpu().numpy()
+                # copy the arc from first char of the head to all chars consisting its children
+                for child_id, head_id in arc_indices:
+                    label_id = wl_rels[i][child_id][head_id]
+                    head_tids = wid2tid[head_id]
+                    # get the first token of the head word
+                    token_head_tid = head_tids[0]
+                    child_tids = wid2tid[child_id]
+                    for child_tid in child_tids:
+                        # ignore out of range arcs
+                        if child_tid < max_length and token_head_tid < max_length:
+                            heads[child_tid][token_head_tid] = 1
+                            rels[child_tid][token_head_tid] = label_id
+            if debug:
+                torch.set_printoptions(profile="full")
+                print ("heads:\n", heads)
+                print ("rels:\n", rels)
+
+            if "word" in expand_type:
+                # add arc with word_label from following chars to the first char of each word
+                for tids in wid2tid:
+                    if len(tids) > 1:
+                        root_id = tids[0]
+                        for cid in tids[1:]:
+                            heads[cid][root_id] = 1
+                            rels[cid][root_id] = word_label_id
+                if debug:
+                    print ("heads (word arc):\n", heads)
+                    print ("rels (word arc):\n", rels)
+                    #exit()
+
+            heads_list.append(heads.to_sparse())
+            rels_list.append(rels.to_sparse())
+            # delete dense tensor to save mem
+            del heads
+            del rels
+
+        heads = torch.stack(heads_list, dim=0)
+        rels = torch.stack(rels_list, dim=0)
+
+        if debug:
+            print ("heads:\n", heads)
+            print ("rels:\n", rels)
+            exit()
+
+        return heads, rels
+
+
 class SDPParser(object):
     def __init__(self, model_path, pretrained_lm="roberta", lm_path=None,
                 use_pretrained_static=False, batch_size=16, parser_type="dm"):
@@ -592,6 +693,56 @@ class SDPParser(object):
               [np.pad(a, (0, max_len - len(a)), 'constant', constant_values=0) for a in first_ids_list])
         first_ids = torch.from_numpy(first_ids)
         return first_ids, first_ids_list
+
+
+    def add_root_and_parse(
+            self, 
+            tokens, 
+            input_ids, 
+            attention_mask, 
+            word_ids, 
+            max_length=128,
+            expand_type="copy-word",
+            debug=False):
+
+        # add root token
+        lengths = [sum(mask)+1 for mask in attention_mask]
+        rooted_word_ids = [[x[0]]+[-1]+x[1:] for x in word_ids]
+        word_lens = [len(h)+2 for h in tokens] # also add the last [SEP] token
+        max_word_len = max(word_lens)
+        rooted_input_ids = [[self.tokenizer.cls_token_id]+x for x in input_ids]
+
+        wid2tid_list = get_word2token_map(rooted_word_ids, lengths)
+        
+        first_ids_list = []
+        for i, wid2tid in enumerate(wid2tid_list):
+            # rm the first [CLS] token, only takes first_ids in word len
+            first_ids = [tids[0] for tids in wid2tid[1:word_lens[i]+1]]
+            assert len(first_ids) == word_lens[i]
+            while len(first_ids) < max_word_len:
+                first_ids.append(0)
+            first_ids_list.append(first_ids)
+
+            if debug:
+                print ("tokens:\n", tokens[i])
+                print ("rooted_word_ids:\n", rooted_word_ids[i])
+                print ("wid2tid:\n", wid2tid_list[i])
+                print ("first_ids:\n", first_ids_list[i])
+                print ("rooted_input_ids:\n", rooted_input_ids[i])
+
+        first_ids = torch.from_numpy(np.array(first_ids_list))
+        ids = torch.from_numpy(np.array(rooted_input_ids))
+        wl_heads, wl_rels = self.predict(first_ids, ids)
+
+        heads, rels = word_level_to_subword_level_heads(
+                            attention_mask=attention_mask,
+                            word_ids=word_ids,
+                            wl_heads=wl_heads,
+                            wl_rels=wl_rels,
+                            max_length=max_length,
+                            expand_type=expand_type,
+                            word_label_id=self.parser_label_map[self.word_label])
+        return heads, rels
 
 
     def predict(self, first_ids, ids, debug=False):
