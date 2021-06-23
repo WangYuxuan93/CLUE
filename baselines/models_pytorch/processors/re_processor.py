@@ -66,6 +66,9 @@ def collate_fn(batch):
     elif num_items == 8:
         all_input_ids, all_attention_mask, all_token_type_ids, all_ent1_ids, all_ent2_ids, \
         all_labels, all_heads, all_rels = map(torch.stack, zip(*batch))
+    elif num_items == 10:
+        all_input_ids, all_attention_mask, all_token_type_ids, all_ent1_ids, all_ent2_ids, \
+        all_labels, all_heads, all_rels, all_extra_heads, all_extra_rels = map(torch.stack, zip(*batch))
     max_len = max(all_attention_mask.sum(-1)).item()
     # save all_input_ids to decise between word/subword-level 
     all_input_ids_ = all_input_ids[:, :max_len]
@@ -75,7 +78,6 @@ def collate_fn(batch):
     if all_heads is not None:
         head_max_len = max_len
         #print ("head_max_len=",head_max_len)
-        
         if all_heads.is_sparse:
             all_heads = all_heads.to_dense()
             all_rels = all_rels.to_dense()
@@ -83,6 +85,16 @@ def collate_fn(batch):
         
         all_heads = all_heads[:, :head_max_len, :head_max_len]
         all_rels = all_rels[:, :head_max_len, :head_max_len]
+
+    if all_extra_heads is not None:
+        head_max_len = max_len
+        if all_extra_heads.is_sparse:
+            all_extra_heads = all_extra_heads.to_dense()
+            all_extra_rels = all_extra_rels.to_dense()
+        assert len(all_extra_heads.size()) == 3
+        
+        all_extra_heads = all_extra_heads[:, :head_max_len, :head_max_len]
+        all_extra_rels = all_extra_rels[:, :head_max_len, :head_max_len]
 
     batch = {}
     batch["input_ids"] = all_input_ids_
@@ -93,6 +105,8 @@ def collate_fn(batch):
     batch["labels"] = all_labels
     batch["heads"] = all_heads
     batch["rels"] = all_rels
+    batch["extra_heads"] = all_extra_heads
+    batch["extra_rels"] = all_extra_rels
     return batch
 
 
@@ -136,6 +150,33 @@ class InputParsedReFeatures(object):
         self.ent1_id = ent1_id
         self.ent2_id = ent2_id
         self.label = label
+
+
+class InputSemSynReFeatures(object):
+    """A single set of features of data."""
+    def __init__(
+            self, 
+            input_ids, 
+            attention_mask, 
+            token_type_ids, 
+            heads,
+            rels,
+            extra_heads,
+            extra_rels,
+            ent1_id, 
+            ent2_id, 
+            label=None
+        ):
+        self.input_ids = input_ids
+        self.attention_mask = attention_mask
+        self.token_type_ids = token_type_ids
+        self.ent1_id = ent1_id
+        self.ent2_id = ent2_id
+        self.label = label
+        self.heads = heads
+        self.rels = rels
+        self.extra_heads = extra_heads
+        self.extra_rels = extra_rels
 
 
 class ReProcessor(DataProcessor):
@@ -403,7 +444,23 @@ def convert_parsed_examples_to_features(
     ent1_tok_id = tokenizer.convert_tokens_to_ids('@')
     ent2_tok_id = tokenizer.convert_tokens_to_ids('#')
 
+    use_multi_parsers = True if isinstance(parser, list) else False
+
+    if use_multi_parsers:
+        parsers = parser
+        parser = parsers[0]
+
     heads, rels = parser.add_root_and_parse(
+                    tokens=texts,
+                    input_ids=tokenized_inputs['input_ids'],
+                    attention_mask=tokenized_inputs['attention_mask'],
+                    word_ids=word_ids,
+                    max_length=max_length,
+                    expand_type=expand_type
+                )
+    if use_multi_parsers:
+        # only support 2 different parsers now !
+        extra_heads, extra_rels = parsers[1].add_root_and_parse(
                     tokens=texts,
                     input_ids=tokenized_inputs['input_ids'],
                     attention_mask=tokenized_inputs['attention_mask'],
@@ -442,15 +499,28 @@ def convert_parsed_examples_to_features(
             logger.info("heads:\n{}".format(heads[ex_index]))
             logger.info("rels:\n{}".format(rels[ex_index]))
 
-        features.append(
-            InputParsedReFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
-                          attention_mask=tokenized_inputs['attention_mask'][ex_index],
-                          token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
-                          ent1_id=ent1_id,
-                          ent2_id=ent2_id,
-                          label=label_id,
-                          heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
-                          rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse()))
+        if not use_multi_parsers:
+            features.append(
+                InputParsedReFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                              ent1_id=ent1_id,
+                              ent2_id=ent2_id,
+                              label=label_id,
+                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
+                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse()))
+        else:
+            features.append(
+                InputSemSynReFeatures(input_ids=tokenized_inputs['input_ids'][ex_index],
+                              attention_mask=tokenized_inputs['attention_mask'][ex_index],
+                              token_type_ids=tokenized_inputs['token_type_ids'][ex_index],
+                              ent1_id=ent1_id,
+                              ent2_id=ent2_id,
+                              label=label_id,
+                              heads=heads[ex_index] if heads.is_sparse else heads[ex_index].to_sparse(),
+                              rels=rels[ex_index] if rels.is_sparse else rels[ex_index].to_sparse(),
+                              extra_heads=extra_heads[ex_index] if extra_heads.is_sparse else extra_heads[ex_index].to_sparse(),
+                              extra_rels=extra_rels[ex_index] if extra_rels.is_sparse else extra_rels[ex_index].to_sparse()))
 
     return features
 
@@ -458,10 +528,11 @@ def convert_parsed_examples_to_features(
 def load_and_cache_examples(args, task, tokenizer, data_type='train', return_examples=False):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+    # be true if parser_model is a list
+    use_multi_parsers = isinstance(args.parser_model, list)
 
     processor = ReProcessor(task)
 
-    output_mode = 'srl'
     cached_examples_file = os.path.join(args.data_dir, 'cached_examples_{}_{}'.format(data_type, str(task) if not args.is_word_level else str(task)+"-word-level"))
     if return_examples:
         if not os.path.exists(cached_examples_file):
@@ -488,7 +559,21 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
             args.parser_align_type))
         logger.info("Cached features filename: {}".format(cached_features_file))
     else:
-        cached_features_file = cached_features_filename(args, task if not args.is_word_level else task+"-word-level", data_type=data_type)
+        if not use_multi_parsers:
+            cached_features_file = cached_features_filename(args, task if not args.is_word_level else task+"-word-level", data_type=data_type)
+        else:
+            parser_info = []
+            for parser_model in args.parser_model:
+                parser_info.append(os.path.basename(parser_model))
+            parser_info = "@".join(parser_info)
+            cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_parsed_{}_{}_{}'.format(
+                data_type,
+                list(filter(None, args.model_name_or_path.split('/'))).pop(),
+                str(args.max_seq_length),
+                str(task),
+                parser_info,
+                args.parser_expand_type,
+                args.parser_align_type))
 
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
@@ -508,12 +593,29 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         """
 
         if args.parser_model is not None:
-            if args.parser_type == "dp":
-                biaffine_parser = Parser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
-                                    batch_size=args.parser_batch, parser_type=args.parser_type)
-            elif args.parser_type == "sdp":
-                biaffine_parser = SDPParser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
-                                    batch_size=args.parser_batch, parser_type=args.parser_type)
+            # this is for single parser_model
+            if not isinstance(args.parser_model, list):
+                if args.parser_type == "dp":
+                    biaffine_parser = Parser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                        batch_size=args.parser_batch, parser_type=args.parser_type)
+                elif args.parser_type == "sdp":
+                    biaffine_parser = SDPParser(args.parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                        batch_size=args.parser_batch, parser_type=args.parser_type)
+            # this is for multiple parser_model
+            else:
+                parsers = []
+                for parser_type, parser_model in zip(args.parser_type, args.parser_model):
+                    if parser_type == "dp":
+                        biaffine_parser = Parser(parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                            batch_size=args.parser_batch, parser_type=parser_type)
+                    elif parser_type == "sdp":
+                        biaffine_parser = SDPParser(parser_model, pretrained_lm="roberta", lm_path=args.parser_lm_path,
+                                            batch_size=args.parser_batch, parser_type=parser_type)
+                    parsers.append(biaffine_parser)
+                biaffine_parser = parsers
+                if len(biaffine_parser) > 2:
+                    logger.info("Currently only support two different parsers!")
+                    exit()
         else:
             biaffine_parser = None
 
@@ -575,8 +677,14 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
     else:
         all_heads = torch.stack([f.heads for f in features])
         all_rels = torch.stack([f.rels for f in features])
-        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_ent1_ids,
-                                all_ent2_ids, all_labels, all_heads, all_rels)
+        if not use_multi_parsers:
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_ent1_ids,
+                                    all_ent2_ids, all_labels, all_heads, all_rels)
+        else:
+            all_extra_heads = torch.stack([f.extra_heads for f in features])
+            all_extra_rels = torch.stack([f.extra_rels for f in features])
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_ent1_ids,
+                                    all_ent2_ids, all_labels, all_heads, all_rels, all_extra_heads, all_extra_rels)
 
     if return_examples:
         return dataset, examples

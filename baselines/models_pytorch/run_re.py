@@ -77,6 +77,12 @@ def _prepare_inputs(inputs, device, use_dist=False, debug=False):
         del inputs["heads"]
         del inputs["rels"]
 
+    if "extra_heads" in inputs and inputs["extra_heads"] is not None:
+        inputs["heads"] = [inputs["heads"], inputs["extra_heads"].float()]
+        inputs["rels"] = [inputs["rels"], inputs["extra_rels"]]
+    del inputs["extra_heads"]
+    del inputs["extra_rels"]
+
     return inputs
 
 def delete_old_checkpoints(output_dir, best_checkpoint, save_limit=1):
@@ -413,7 +419,7 @@ def main():
     parser.add_argument("--parser_model", default=None, type=str, help="Parser model's path")
     parser.add_argument("--parser_lm_path", default=None, type=str, help="Parser model's pretrained LM path")
     parser.add_argument("--parser_batch", default=32, type=int, help="Batch size for parser")
-    parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp"], help="Type of the parser")
+    parser.add_argument("--parser_type", default="sdp", type=str, choices=["dp","sdp","sdp:dp"], help="Type of the parser")
     parser.add_argument("--parser_expand_type", default="copy", type=str, choices=["copy","word","copy-word","wist","copy-wist"], help="Policy to expand parses")
     parser.add_argument("--parser_align_type", default="jieba", type=str, choices=["jieba","pkuseg","rule"], help="Policy to align subwords in parser")
     parser.add_argument("--parser_return_tensor", action='store_true', help="Whether parser should return a tensor")
@@ -548,10 +554,19 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    if args.parser_model is not None or args.official_syntax_type:
+    if args.parser_model is not None:
         config_class = SCONFIG_CLASSES[args.model_type]
         model_class = SMODEL_CLASSES[args.model_type]
         tokenizer_class = AutoTokenizer
+        parser_models = args.parser_model.split(":")
+        if len(parser_models) > 1:
+            parser_types = args.parser_type.split(":")
+            try:
+                assert len(parser_types) == len(parser_models)
+            except:
+                logger.info("Must provide %d parser_types" % len(parser_models))
+            args.parser_model = parser_models
+            args.parser_type = parser_types
     else:
         config_class = CONFIG_CLASSES[args.model_type]
         model_class = MODEL_CLASSES[args.model_type]
@@ -568,7 +583,11 @@ def main():
         if args.official_syntax_type:
             config.graph["num_rel_labels"] = len(processor.get_syntax_label_map())
         elif args.parser_model is not None:
-            label_path = os.path.join(args.parser_model, "alphabets/type.json")
+            if isinstance(args.parser_model, list):
+                parser_model = args.parser_model[0]
+            else:
+                parser_model = args.parser_model
+            label_path = os.path.join(parser_model, "alphabets/type.json")
             parser_label2id = load_labels_from_json(label_path)
             config.graph["num_rel_labels"] = len(parser_label2id)
 

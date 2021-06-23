@@ -284,8 +284,11 @@ def load_and_cache_examples(args, task, tokenizer, data_type='train', return_exa
         if args.official_syntax_type == "sdp-pred":
             all_extra_heads = torch.stack([f.extra_heads for f in features])
             all_extra_rels = torch.stack([f.extra_rels for f in features])
-        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
-                                all_first_ids, all_word_mask, all_heads, all_rels, all_extra_heads, all_extra_rels)
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
+                                    all_first_ids, all_word_mask, all_heads, all_rels, all_extra_heads, all_extra_rels)
+        else:
+            dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_predicate_mask, all_labels, 
+                                    all_first_ids, all_word_mask, all_heads, all_rels)
 
 
     if return_examples:
