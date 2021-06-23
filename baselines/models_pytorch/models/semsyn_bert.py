@@ -1337,3 +1337,80 @@ class SemSynBertForEnd2EndSrl(BertPreTrainedModel):
 
         output = (transposed_rel_logits,) + outputs[2:]
         return ((loss,) + output) if loss is not None else output
+
+
+
+class SemSynBertForRelationExtraction(BertPreTrainedModel):
+
+    _keys_to_ignore_on_load_unexpected = [r"pooler"]
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+
+        self.bert = SemSynBertModel(config, add_pooling_layer=False)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(2*config.hidden_size, config.num_labels)
+
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        ent1_ids=None,
+        ent2_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        heads=None,
+        rels=None
+    ):
+        r"""
+        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+            Labels for computing the token classification loss. Indices should be in ``[0, ..., config.num_labels -
+            1]``.
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            heads=heads,
+            rels=rels,
+        )
+
+        sequence_output = outputs[0]
+
+        sequence_output = self.dropout(sequence_output)
+
+        # (batch) => (batch, 1)
+        ent1_ids = ent1_ids.unsqueeze(1)
+        ent2_ids = ent2_ids.unsqueeze(1)
+
+        size1 = list(ent1_ids.size()) + [sequence_output.size()[-1]]
+        # (batch, 1, hidden_size) => (batch, hidden_size)
+        ent1_output = sequence_output.gather(1, ent1_ids.unsqueeze(-1).expand(size1)).squeeze(1)
+
+        size2 = list(ent2_ids.size()) + [sequence_output.size()[-1]]
+        # (batch, 1, hidden_size) => (batch, hidden_size)
+        ent2_output = sequence_output.gather(1, ent2_ids.unsqueeze(-1).expand(size2)).squeeze(1)
+
+        # (batch, 2*hidden_size)
+        output = torch.cat([ent1_output, ent2_output], dim=-1)
+        # (batch, num_labels)
+        logits = self.classifier(output)
+
+        loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        output = (logits,) + outputs[2:]
+        return ((loss,) + output) if loss is not None else output

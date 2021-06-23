@@ -30,7 +30,7 @@ from neuronlp2.parser import Parser
 from neuronlp2.sdp_parser import SDPParser
 from models.semsyn_bert import SemSynBertConfig
 from models.semsyn_roberta import SemSynRobertaConfig
-from models.semsyn_bert import SemSynBertForEnd2EndSrl
+from models.semsyn_bert import SemSynBertForRelationExtraction
 from models.semsyn_roberta import SemSynRobertaForEnd2EndSrl
 from models.modeling_bert import BertConfig
 from models.modeling_bert import BertForRelationExtraction
@@ -47,7 +47,7 @@ SCONFIG_CLASSES = {
 }
 
 SMODEL_CLASSES = {
-    'bert': SemSynBertForEnd2EndSrl,
+    'bert': SemSynBertForRelationExtraction,
     'roberta': SemSynRobertaForEnd2EndSrl,
 }
 
