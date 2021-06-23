@@ -574,10 +574,11 @@ def main():
 
         tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                     do_lower_case=args.do_lower_case, use_fast=True, add_prefix_space=True)
+        train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, data_type='train')
+
         model = model_class.from_pretrained(args.model_name_or_path, config=config)
         model.to(args.device)
         
-        train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, data_type='train')
         global_step, tr_loss, best_checkpoint = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
         if best_checkpoint is not None:
