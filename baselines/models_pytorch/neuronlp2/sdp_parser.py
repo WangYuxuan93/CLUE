@@ -732,7 +732,15 @@ class SDPParser(object):
 
         first_ids = torch.from_numpy(np.array(first_ids_list))
         ids = torch.from_numpy(np.array(rooted_input_ids))
-        wl_heads, wl_rels = self.predict(first_ids, ids)
+
+        batch_size = self.batch_size
+        wl_heads, wl_rels = [], []
+        for i in range(0, len(ids), batch_size):
+            batched_ids = ids[i:i+batch_size]
+            batched_first_ids = first_ids[i:i+batch_size]
+            batched_wl_heads, batched_wl_rels = self.predict(batched_first_ids, batched_ids)
+            wl_heads.extend(batched_wl_heads)
+            wl_rels.extend(batched_wl_rels)
 
         heads, rels = word_level_to_subword_level_heads(
                             attention_mask=attention_mask,
