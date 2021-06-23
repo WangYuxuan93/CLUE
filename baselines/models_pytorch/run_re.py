@@ -229,7 +229,7 @@ def train(args, train_dataset, model, tokenizer):
                             if not key.startswith('eval'):
                                 _result['eval_'+key] = result[key]
                         log_history.append(_result)
-                    decisive_metric = 'acc'
+                    decisive_metric = 'f1'
                     if result is None or result[decisive_metric] > trainer_state['best_metric']:
                         # Save model checkpoint
                         output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))

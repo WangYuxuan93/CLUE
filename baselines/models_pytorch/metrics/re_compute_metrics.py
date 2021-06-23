@@ -15,25 +15,43 @@ except (AttributeError, ImportError) as e:
 def simple_accuracy(preds, labels):
     return (preds == labels).mean()
 
-def acc_and_f1(preds, labels):
-    acc = simple_accuracy(preds, labels)
-    f1 = f1_score(y_true=labels, y_pred=preds)
+def prf(preds, labels, pad_id=0):
+    n_corr, n_pred, n_gold = 0, 0, 0
+    for p, l in zip(preds, labels):
+        if p != pad_id:
+            n_pred += 1
+        if l != pad_id:
+            n_gold += 1
+        if p != pad_id and l != pad_id and p == l:
+            n_corr += 1
+    if n_pred == 0:
+        n_pred = 1
+    if n_gold == 0:
+        n_gold = 1
+    n_corr = float(n_corr)
+    recall = n_corr / n_gold
+    precision = n_corr / n_pred
+    if precision + recall == 0:
+        f1 = 0
+    else:
+        f1 = 2 * (precision * recall) / (precision + recall)
     return {
-        "acc": acc,
-        "f1": f1,
-        "acc_and_f1": (acc + f1) / 2,
+        "n_correct": n_corr,
+        "n_gold": n_gold,
+        "n_pred": n_pred,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1
     }
 
-def pearson_and_spearman(preds, labels):
-    pearson_corr = pearsonr(preds, labels)[0]
-    spearman_corr = spearmanr(preds, labels)[0]
-    return {
-        "pearson": pearson_corr,
-        "spearmanr": spearman_corr,
-        "corr": (pearson_corr + spearman_corr) / 2,
-    }
+def acc_and_f1(preds, labels):
+    acc = simple_accuracy(preds, labels)
+    results = prf(preds=preds, labels=labels, pad_id=0)
+    results["acc"] = acc
+    return results
 
 def compute_metrics(task_name, preds, labels):
     assert len(preds) == len(labels)
-    return {"acc": simple_accuracy(preds, labels)}
+    return acc_and_f1(preds, labels)
+    #return {"acc": simple_accuracy(preds, labels)}
 
