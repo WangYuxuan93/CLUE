@@ -752,7 +752,6 @@ class SDPParser(object):
                             word_label_id=self.parser_label_map[self.word_label])
         return heads, rels
 
-
     def predict(self, first_ids, ids, debug=False):
         heads, rels = [], []
         masks = torch.ones_like(first_ids)
