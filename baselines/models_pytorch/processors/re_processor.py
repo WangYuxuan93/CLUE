@@ -60,6 +60,7 @@ def collate_fn(batch):
     """
     num_items = len(batch[0])
     all_heads, all_rels, all_dists = None, None, None
+    all_extra_heads, all_extra_rels = None, None
     if num_items == 6:
         all_input_ids, all_attention_mask, all_token_type_ids, all_ent1_ids, all_ent2_ids, \
         all_labels = map(torch.stack, zip(*batch))
