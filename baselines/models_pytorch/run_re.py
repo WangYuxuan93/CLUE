@@ -252,7 +252,7 @@ def train(args, train_dataset, model, tokenizer):
                         tokenizer.save_pretrained(output_dir)
                         #tokenizer.save_vocabulary(vocab_path=output_dir)
 
-                        delete_old_checkpoints(args.output_dir, trainer_state['best_checkpoint'])
+                        delete_old_checkpoints(args.output_dir, trainer_state['best_checkpoint'], save_limit=args.save_limit)
 
         print(" ")
         if 'cuda' in str(args.device):
@@ -411,6 +411,7 @@ def main():
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--optim", default="AdamW", type=str, choices=["BERTAdam","AdamW"], help="Optimizer")
+    parser.add_argument("--save_limit", default=1, type=int, help="Max number of models to save")
     ## SBERT parameters
     #parser.add_argument("--use_gold_syntax", action='store_true', help="Whether to use gold syntax tree")
     parser.add_argument("--official_syntax_type", default=None, type=str, choices=[None, "gold", "pred", "diff", "same", "sdp"], help="Type of the official syntax used")
